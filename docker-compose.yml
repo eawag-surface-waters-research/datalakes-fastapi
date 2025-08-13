@@ -1,0 +1,16 @@
+version: "3.9"
+services:
+  datalakes:
+    build: .
+    container_name:
+      datalakes-fastapi
+    healthcheck:
+      test: [ "CMD", "curl", "--fail", "http://localhost:8000" ]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    volumes:
+      - "${FILESYSTEM}:/code/filesystem"
+    ports:
+      - "8000:8000"

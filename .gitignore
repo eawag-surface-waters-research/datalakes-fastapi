@@ -1,0 +1,9 @@
+.env
+.idea
+app/test.py
+app/__pycache__
+app/routes/__pycache__
+app/tests/__pycache__
+notebooks
+filesystem/*
+!filesystem/.gitkeep
