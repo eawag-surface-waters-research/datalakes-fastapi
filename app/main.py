@@ -1,12 +1,18 @@
-from fastapi import FastAPI, Request
+from typing import Annotated
+from fastapi import FastAPI, Request, Form
 from fastapi.responses import JSONResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 
+import os
 import sentry_sdk
+from dotenv import load_dotenv
 
+import app.auth as auth
 from app.routes import datasetparameters
 
+load_dotenv()
+GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
 sentry_sdk.init(
     dsn="https://71eb5021a774490f9e1c273e06fc33de@o1106970.ingest.us.sentry.io/4509836725125120",
     traces_sample_rate=1.0,
@@ -39,6 +45,10 @@ For bug reports, collaboration requests, or to join our mailing list for updates
 app = FastAPI(
     title="Datalakes API",
     description=description,
+    swagger_ui_init_oauth={
+        "clientId": GITHUB_CLIENT_ID,
+        "appName": "GitHub OAuth API",
+    },
     version="2.0.0",
     contact={
         "name": "James Runnalls",
@@ -79,5 +89,17 @@ async def value_error_exception_handler(request: Request, exc: ValueError):
 def welcome():
     return {"Welcome to the Datalakes API from Eawag. Navigate to /docs or /redoc for documentation. For "
             "queries please contact James Runnalls (james.runnall@eawag.ch)."}
+
+@app.post("/api/auth/token", tags=["Authentication"], summary="Swagger UI OAuth2 Token Exchange", include_in_schema=False)
+async def github_token(
+    code: Annotated[str, Form(..., description="The authorization code from GitHub.")]
+):
+    """
+    Handles the token exchange from the authorization code.
+    This endpoint is designed specifically to be called by the Swagger UI.
+    It returns a token in the format expected by Swagger UI's authorization flow.
+    """
+    token = await auth.get_access_token(code)
+    return {"access_token": token, "token_type": "bearer"}
 
 app.include_router(datasetparameters.router)
