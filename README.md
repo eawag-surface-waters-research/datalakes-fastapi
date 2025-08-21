@@ -51,6 +51,16 @@ docker compose down
 docker compose up --build -d
 ```
 
+## Authentication
+
+Authentication uses OAuth2 with the GitHub API. GET requests are public however; POST, PUT & DELETE requests require 
+login with a GitHub account. This can be done using the Swagger documentation or via the Datalakes website.
+
+Permissions are controlled using the Datalakes GitHub team: https://github.com/orgs/eawag-surface-waters-research/teams/datalakes
+
+Maintainers of the Datalakes team have full admin rights whereas members are only able to add and edit only their 
+own datasets (limited rights).
+
 ## Local Development
 
 ### 1. Install virtual environment
