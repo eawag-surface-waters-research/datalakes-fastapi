@@ -3,20 +3,33 @@ from fastapi import FastAPI, Request, Form
 from fastapi.responses import JSONResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 
 import os
+import sys
 import sentry_sdk
 from dotenv import load_dotenv
 
 import app.auth as auth
-from app.routes import datasetparameters
+from app.routes import selectiontables
+from app.database import (
+    check_db_connection,
+    engine,
+    DATABASE_URL,
+    get_safe_db_url
+)
 
 load_dotenv()
+
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
-sentry_sdk.init(
-    dsn="https://71eb5021a774490f9e1c273e06fc33de@o1106970.ingest.us.sentry.io/4509836725125120",
-    traces_sample_rate=1.0,
-)
+PRODUCTION = os.getenv("PRODUCTION", "false").lower() == "true"
+
+if PRODUCTION:
+    sentry_sdk.init(
+        dsn="https://71eb5021a774490f9e1c273e06fc33de@o1106970.ingest.us.sentry.io/4509836725125120",
+        traces_sample_rate=1.0,
+    )
+
 origins = [
     "http://localhost:3000",
     "https://www.alplakes.eawag.ch",
@@ -42,8 +55,49 @@ Additionally, we cannot guarantee continuous availability of the API. Service di
 For bug reports, collaboration requests, or to join our mailing list for updates, feel free to [get in touch](mailto:james.runnalls@eawag.ch).
 """
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    print("\n" + "=" * 70)
+    print("🚀 APPLICATION STARTUP")
+    print("=" * 70)
+    print(f"🔌 Database: {get_safe_db_url(DATABASE_URL)}")
+
+    # Check database connection
+    print("\n🔍 Testing database connection...")
+    if not await check_db_connection(max_retries=3, retry_delay=2):
+        print("\n" + "!" * 70)
+        print("❌ FATAL ERROR: Cannot connect to database!")
+        print("!" * 70)
+        print("\n📋 Troubleshooting checklist:")
+        print("  ☐ Is DATABASE_URL set correctly in .env?")
+        print("  ☐ Is PostgreSQL running? (systemctl status postgresql)")
+        print("  ☐ Can you connect manually? (psql -h host -U user -d dbname)")
+        print("  ☐ Is the hostname resolvable? (ping hostname)")
+        print("  ☐ Are credentials correct?")
+        print("  ☐ Is the database firewall allowing connections?")
+        print("!" * 70 + "\n")
+        await engine.dispose()
+        sys.exit(1)
+
+    print("✅ Database connection successful!")
+    print("\n" + "=" * 70)
+    print("✅ APPLICATION READY")
+    print("=" * 70 + "\n")
+
+    yield
+
+    # Shutdown
+    print("\n" + "=" * 70)
+    print("🔌 SHUTTING DOWN")
+    print("=" * 70)
+    await engine.dispose()
+    print("✅ Database connections closed\n")
+
 app = FastAPI(
     title="Datalakes API",
+    lifespan=lifespan,
     description=description,
     swagger_ui_init_oauth={
         "clientId": GITHUB_CLIENT_ID,
@@ -102,4 +156,4 @@ async def github_token(
     token = await auth.get_access_token(code)
     return {"access_token": token, "token_type": "bearer"}
 
-app.include_router(datasetparameters.router)
+app.include_router(selectiontables.router)

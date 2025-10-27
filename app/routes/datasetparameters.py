@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends
 from app.auth import check_permissions
 
+from app.database import SessionDep
+
 
 router = APIRouter(
     prefix="/datasetparameters",

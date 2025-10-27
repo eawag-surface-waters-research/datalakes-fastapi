@@ -68,7 +68,7 @@ own datasets (limited rights).
 ```console
 conda create --name fastapi python=3.11
 conda activate fastapi
-conda install --file requirements.txt
+pip install -r requirements.txt
 ```
 
 ### 2. Run API
