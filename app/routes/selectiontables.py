@@ -1,11 +1,11 @@
-import asyncio
-from fastapi import APIRouter, Path
+from fastapi import APIRouter, Path, HTTPException, status, Depends
 from sqlmodel import select
-from typing import Literal
+from typing import Literal, Dict, Any, Union
+from pydantic import ValidationError
 
 from app.database import SessionDep
 from app import models
-from app.auth import check_permissions
+from app.auth import check_member
 
 router = APIRouter(
     prefix="/selectiontables",
@@ -43,3 +43,27 @@ async def get_table_data(
     model = TABLE_MODELS[table]
     results = await session.exec(select(model))
     return results.all()
+
+
+@router.post("/{table}", status_code=status.HTTP_201_CREATED)
+async def create_table_row(
+        data: Dict[str, Any],
+        session: SessionDep,
+        table: TableName = Path(..., description="Table name"),
+        _: dict = Depends(check_member)):
+    """Create a new row in the specified table"""
+    model = TABLE_MODELS[table]
+
+    try:
+        new_row = model.model_validate(data)
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=e.errors()
+        )
+
+    session.add(new_row)
+    await session.commit()
+    await session.refresh(new_row)
+
+    return new_row

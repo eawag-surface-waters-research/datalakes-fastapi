@@ -2,6 +2,7 @@ import asyncio
 from sqlalchemy import text
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
+from sqlalchemy.pool import NullPool
 from typing import Annotated, AsyncGenerator
 from fastapi import Depends
 import os
@@ -20,8 +21,9 @@ DATABASE_URL = f"postgresql+asyncpg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT
 
 engine: AsyncEngine = create_async_engine(
     DATABASE_URL,
-    echo=not PRODUCTION,
-    future=True
+    echo=False,
+    future=True,
+    poolclass=NullPool if not PRODUCTION else None
 )
 
 def get_safe_db_url(url: str) -> str:

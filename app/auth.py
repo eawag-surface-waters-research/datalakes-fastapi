@@ -4,6 +4,8 @@ import httpx
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2AuthorizationCodeBearer
 
+from app.database import SessionDep
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -92,7 +94,7 @@ async def get_github_user(token: str) -> Dict:
             detail="Could not fetch user data from GitHub."
         )
 
-async def check_permissions(token: str = Depends(oauth2_scheme), datasets_id: Optional[str] = None) -> bool:
+async def check_dataset_permissions(datasets_id: int, session: SessionDep, token: str = Depends(oauth2_scheme)) -> dict:
     """
     Checks users permission for endpoints.
     """
@@ -102,12 +104,44 @@ async def check_permissions(token: str = Depends(oauth2_scheme), datasets_id: Op
         team_url = GITHUB_TEAM_MEMBERSHIP_URL.format(username=user_data["login"])
         team_response = await client.get(team_url, headers=headers)
         team_role = team_response.json().get('role', 'member')
-        if datasets_id and team_role == "member":
-            # Add logic here to verify datasets_id ownership
+        if team_role == "maintainer":
+            return user_data
+        elif team_role == "member":
+            # Request username for dataset to verify ownership
             print(datasets_id)
-            return True
-        elif team_role in ["maintainer", "member"]:
-            return True
+            return user_data
+    except:
+        pass
+    raise HTTPException(status_code=403, detail="Permission denied, user doesn't have sufficient permissions")
+
+async def check_member(token: str = Depends(oauth2_scheme)) -> dict:
+    """
+    Checks users permission for endpoints.
+    """
+    user_data = await get_github_user(token)
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
+    try:
+        team_url = GITHUB_TEAM_MEMBERSHIP_URL.format(username=user_data["login"])
+        team_response = await client.get(team_url, headers=headers)
+        team_role = team_response.json().get('role', 'member')
+        if team_role in ["maintainer", "member"]:
+            return user_data
+    except:
+        pass
+    raise HTTPException(status_code=403, detail="Permission denied, user doesn't have sufficient permissions")
+
+async def check_maintainer(token: str = Depends(oauth2_scheme)) -> dict:
+    """
+    Checks users permission for endpoints.
+    """
+    user_data = await get_github_user(token)
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
+    try:
+        team_url = GITHUB_TEAM_MEMBERSHIP_URL.format(username=user_data["login"])
+        team_response = await client.get(team_url, headers=headers)
+        team_role = team_response.json().get('role', 'member')
+        if team_role in ["maintainer"]:
+            return user_data
     except:
         pass
     raise HTTPException(status_code=403, detail="Permission denied, user doesn't have sufficient permissions")

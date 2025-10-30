@@ -1,30 +1,31 @@
 from sqlmodel import SQLModel, Field
+from typing import Optional
 
 class Parameters(SQLModel, table=True):
     __tablename__ = "parameters"
     id: int | None = Field(default=None, primary_key=True)
     name: str
     cfname: str
-    description: str
+    description: Optional[str] = None
     unit: str
     characteristic: str
-    german: str
-    french: str
-    italian: str
+    german: Optional[str] = None
+    french: Optional[str] = None
+    italian: Optional[str] = None
 
 class Lakes(SQLModel, table=True):
     __tablename__ = "lakes"
     id: int | None = Field(default=None, primary_key=True)
     name: str
-    elevation: float
-    depth: float
-    morphology: bool
+    elevation: Optional[float] = None
+    depth: Optional[float] = None
+    morphology: Optional[bool] = False
 
 class Organisations(SQLModel, table=True):
     __tablename__ = "organisations"
     id: int | None = Field(default=None, primary_key=True)
     name: str
-    link: str
+    link: Optional[str] = None
 
 
 class Persons(SQLModel, table=True):
@@ -39,16 +40,16 @@ class Projects(SQLModel, table=True):
     __tablename__ = "projects"
     id: int | None = Field(default=None, primary_key=True)
     name: str
-    link: str
+    link: Optional[str] = None
 
 
 class Sensors(SQLModel, table=True):
     __tablename__ = "sensors"
     id: int | None = Field(default=None, primary_key=True)
     name: str
-    manufacturer: str
-    accuracy: str
-    link: str
+    manufacturer: Optional[str] = None
+    accuracy: Optional[str] = None
+    link: Optional[str] = None
 
 
 class Licenses(SQLModel, table=True):

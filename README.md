@@ -77,7 +77,7 @@ Manually set filesystem path in main.py if files are NOT located in the `filesys
 
 ```console
 conda activate fastapi
-docker compose -f docker-compose.db.yml up
+docker compose -f docker-compose.db.yml up -d
 uvicorn app.main:app --host 0.0.0.0 --reload
 ```
 

@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 
 import os
 import sys
+import logging
 import sentry_sdk
 from dotenv import load_dotenv
 
@@ -20,6 +21,11 @@ from app.database import (
 )
 
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s:     %(message)s'
+)
 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
 PRODUCTION = os.getenv("PRODUCTION", "false").lower() == "true"
@@ -55,45 +61,24 @@ Additionally, we cannot guarantee continuous availability of the API. Service di
 For bug reports, collaboration requests, or to join our mailing list for updates, feel free to [get in touch](mailto:james.runnalls@eawag.ch).
 """
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    print("\n" + "=" * 70)
-    print("🚀 APPLICATION STARTUP")
-    print("=" * 70)
-    print(f"🔌 Database: {get_safe_db_url(DATABASE_URL)}")
-
-    # Check database connection
-    print("\n🔍 Testing database connection...")
+    logging.info("Application startup...")
+    logging.info(f"Database: {get_safe_db_url(DATABASE_URL)}")
+    logging.info("Testing database connection...")
     if not await check_db_connection(max_retries=3, retry_delay=2):
-        print("\n" + "!" * 70)
-        print("❌ FATAL ERROR: Cannot connect to database!")
-        print("!" * 70)
-        print("\n📋 Troubleshooting checklist:")
-        print("  ☐ Is DATABASE_URL set correctly in .env?")
-        print("  ☐ Is PostgreSQL running? (systemctl status postgresql)")
-        print("  ☐ Can you connect manually? (psql -h host -U user -d dbname)")
-        print("  ☐ Is the hostname resolvable? (ping hostname)")
-        print("  ☐ Are credentials correct?")
-        print("  ☐ Is the database firewall allowing connections?")
-        print("!" * 70 + "\n")
+        logging.warning("FATAL ERROR: Cannot connect to database!")
         await engine.dispose()
         sys.exit(1)
-
-    print("✅ Database connection successful!")
-    print("\n" + "=" * 70)
-    print("✅ APPLICATION READY")
-    print("=" * 70 + "\n")
+    logging.info("Database connection successful!")
+    logging.info("Application ready.")
 
     yield
 
-    # Shutdown
-    print("\n" + "=" * 70)
-    print("🔌 SHUTTING DOWN")
-    print("=" * 70)
+    logging.info("Shutting down application...")
     await engine.dispose()
-    print("✅ Database connections closed\n")
+    logging.info("Database connections closed")
+    logging.info("Shutdown complete.")
 
 app = FastAPI(
     title="Datalakes API",

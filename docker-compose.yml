@@ -1,7 +1,30 @@
 version: "3.9"
 services:
-  datalakes:
+  dozzle:
+    image: amir20/dozzle:latest
+    environment:
+      - DOZZLE_USERNAME=admin
+      - DOZZLE_PASSWORD=password
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+  fastapi-app:
     build: .
+    environment:
+      FILESYSTEM: "/code/filesystem"
+      API_KEY: "${API_KEY}"
+      DB_USER: "${DB_USER}"
+      DB_PASSWORD: "${DB_PASSWORD}"
+      DB_NAME: "${DB_NAME}"
+      DB_HOST: "${DB_HOST}"
+      DB_PORT: "${DB_PORT}"
+      DB_DATABASE: "${DB_DATABASE}"
+      GITHUB_CLIENT_ID: "${GITHUB_CLIENT_ID}"
+      GITHUB_CLIENT_SECRET: "${GITHUB_CLIENT_SECRET}"
+      GITHUB_REDIRECT_URI: "${GITHUB_REDIRECT_URI}"
+      GITHUB_ORG: "${GITHUB_ORG}"
+      GITHUB_TEAM_SLUG: "${GITHUB_TEAM_SLUG}"
     container_name:
       datalakes-fastapi
     healthcheck:
@@ -13,4 +36,6 @@ services:
     volumes:
       - "${FILESYSTEM}:/code/filesystem"
     ports:
-      - "8000:8000"
+      - 8000:8000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
