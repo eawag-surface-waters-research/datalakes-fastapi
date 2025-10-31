@@ -10,8 +10,5 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
       - ./db/datalakes_schema.sql:/docker-entrypoint-initdb.d/datalakes_schema.sql
       - ./db/default_data.sql:/docker-entrypoint-initdb.d/default_data.sql
-volumes:
-  postgres_data:

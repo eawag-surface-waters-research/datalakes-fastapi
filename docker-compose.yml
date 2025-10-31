@@ -2,9 +2,6 @@ version: "3.9"
 services:
   dozzle:
     image: amir20/dozzle:latest
-    environment:
-      - DOZZLE_USERNAME=admin
-      - DOZZLE_PASSWORD=password
     ports:
       - "8080:8080"
     volumes:

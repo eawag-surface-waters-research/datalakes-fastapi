@@ -12,7 +12,7 @@ import sentry_sdk
 from dotenv import load_dotenv
 
 import app.auth as auth
-from app.routes import selectiontables
+from app.routes import selectiontables, datasets
 from app.database import (
     check_db_connection,
     engine,
@@ -141,4 +141,5 @@ async def github_token(
     token = await auth.get_access_token(code)
     return {"access_token": token, "token_type": "bearer"}
 
+app.include_router(datasets.router)
 app.include_router(selectiontables.router)

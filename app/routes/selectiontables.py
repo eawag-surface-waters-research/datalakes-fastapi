@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Path, HTTPException, status, Depends
 from sqlmodel import select
-from typing import Literal, Dict, Any, Union
+from typing import Literal, Dict, Any
 from pydantic import ValidationError
 
 from app.database import SessionDep
@@ -25,7 +25,7 @@ TABLE_MODELS = {
 TableName = Literal[tuple(TABLE_MODELS.keys())]
 
 @router.get("/")
-async def get_selection_tables(session: SessionDep):
+async def get_all_selection_tables(session: SessionDep):
     """Get all selection tables data"""
     response = {}
     for table_name, model in TABLE_MODELS.items():
@@ -36,7 +36,7 @@ async def get_selection_tables(session: SessionDep):
 
 
 @router.get("/{table}")
-async def get_table_data(
+async def get_selection_table(
         session: SessionDep,
         table: TableName = Path(..., description="Table name")):
     """Get all rows from the specified table"""
@@ -46,7 +46,7 @@ async def get_table_data(
 
 
 @router.post("/{table}", status_code=status.HTTP_201_CREATED)
-async def create_table_row(
+async def create_section_table_row(
         data: Dict[str, Any],
         session: SessionDep,
         table: TableName = Path(..., description="Table name"),

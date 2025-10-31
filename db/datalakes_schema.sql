@@ -112,6 +112,7 @@ CREATE TABLE public.datasets (
     id integer DEFAULT nextval('public.datasets_id_seq'::regclass) NOT NULL,
     title character varying,
     description character varying,
+    owner character varying,
     origin character varying,
     mapplot character varying,
     mapplotfunction character varying,
@@ -141,8 +142,7 @@ CREATE TABLE public.datasets (
     password character varying,
     accompanyingdata character varying,
     dataportal character varying,
-    monitor integer,
-    internal character varying
+    monitor integer
 );
 
 
@@ -190,7 +190,7 @@ ALTER TABLE public.files OWNER TO datalakes;
 --
 
 CREATE SEQUENCE public.lake_id_seq
-    START WITH 1
+    START WITH 2
     INCREMENT BY 1
     NO MINVALUE
     MAXVALUE 2147483647
@@ -408,7 +408,8 @@ ALTER SEQUENCE public.person_id_seq OWNED BY public.persons.id;
 CREATE TABLE public.projects (
     id integer NOT NULL,
     name character varying,
-    link character varying
+    link character varying,
+    display boolean
 );
 
 

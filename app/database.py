@@ -6,6 +6,7 @@ from sqlalchemy.pool import NullPool
 from typing import Annotated, AsyncGenerator
 from fastapi import Depends
 import os
+import logging
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -49,9 +50,9 @@ async def check_db_connection(max_retries: int = 3, retry_delay: int = 2) -> boo
                 if row and row[0] == 1:
                     return True
         except Exception as e:
-            print(f"❌ Connection attempt {attempt}/{max_retries} failed: {type(e).__name__}: {e}")
+            logging.warning(f"Connection attempt {attempt}/{max_retries} failed: {type(e).__name__}: {e}")
             if attempt < max_retries:
-                print(f"⏳ Retrying in {retry_delay} seconds...")
+                logging.info(f"Retrying in {retry_delay} seconds...")
                 await asyncio.sleep(retry_delay)
     return False
 
