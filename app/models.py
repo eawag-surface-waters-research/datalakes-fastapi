@@ -3,9 +3,7 @@ from sqlalchemy.types import TIMESTAMP, JSON
 from typing import Optional
 from datetime import datetime
 
-class Datasets(SQLModel, table=True):
-    __tablename__ = "datasets"
-    id: Optional[int] = Field(default=None, primary_key=True)
+class DatasetsBase(SQLModel):
     title: Optional[str] = None
     description: Optional[str] = None
     owner: Optional[str] = None
@@ -14,7 +12,6 @@ class Datasets(SQLModel, table=True):
     mapplotfunction: Optional[str] = None
     datasource: Optional[str] = None
     datasourcelink: Optional[str] = None
-    plotproperties: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     citation: Optional[str] = None
     downloads: Optional[int] = None
     fileconnect: Optional[str] = None
@@ -22,8 +19,6 @@ class Datasets(SQLModel, table=True):
     renku: Optional[int] = None
     prefile: Optional[str] = None
     prescript: Optional[str] = None
-    mindatetime: datetime | None = Field(default=None, sa_type=TIMESTAMP(timezone=True))
-    maxdatetime: datetime | None = Field(default=None, sa_type=TIMESTAMP(timezone=True))
     mindepth: Optional[float] = None
     maxdepth: Optional[float] = None
     latitude: Optional[float] = None
@@ -39,6 +34,24 @@ class Datasets(SQLModel, table=True):
     accompanyingdata: Optional[str] = None
     dataportal: Optional[str] = None
     monitor: Optional[int] = None
+
+class Datasets(DatasetsBase, table=True):
+    __tablename__ = "datasets"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    plotproperties: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    mindatetime: Optional[datetime] = Field(default=None, sa_type=TIMESTAMP(timezone=True))
+    maxdatetime: Optional[datetime] = Field(default=None, sa_type=TIMESTAMP(timezone=True))
+
+class DatasetsCreate(DatasetsBase):
+    id: Optional[int] = None
+    plotproperties: Optional[dict] = None
+    mindatetime: Optional[datetime] = None
+    maxdatetime: Optional[datetime] = None
+
+class DatasetsUpdate(DatasetsBase):
+    plotproperties: Optional[dict] = None
+    mindatetime: Optional[datetime] = None
+    maxdatetime: Optional[datetime] = None
 
 class Parameters(SQLModel, table=True):
     __tablename__ = "parameters"
