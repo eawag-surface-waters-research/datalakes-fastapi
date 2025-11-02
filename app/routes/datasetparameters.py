@@ -84,17 +84,9 @@ async def delete_dataset_dataparameters(
         _: dict = Depends(check_dataset_permissions)
 ):
     """Delete all datasetparmeters for a dataset"""
-    # Execute a bulk delete
-    result = await session.exec(
+    await session.exec(
         delete(Datasetparameters).where(Datasetparameters.datasets_id == datasets_id)
     )
-
-    if result.rowcount == 0:
-        raise HTTPException(
-            status_code=404,
-            detail="No dataset parameters found for the given dataset"
-        )
-
     await session.commit()
     return None
 
