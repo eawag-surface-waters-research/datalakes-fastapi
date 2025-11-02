@@ -10,7 +10,6 @@ router = APIRouter(
     tags=["Datasets"]
 )
 
-
 @router.get("/")
 async def get_all_datasets(session: SessionDep):
     """Get all datasets"""
