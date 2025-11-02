@@ -68,7 +68,7 @@ async def test_dataset_lifecycle():
         assert response.status_code == 201
         datasets_id = response.json()["id"]
 
-        response = await ac.put(f"/datasets/{datasets_id}", json=example_data)
+        response = await ac.patch(f"/datasets/{datasets_id}", json=example_data)
         assert response.status_code == 200
         data = response.json()
         for key, value in example_data.items():

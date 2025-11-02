@@ -12,7 +12,7 @@ import sentry_sdk
 from dotenv import load_dotenv
 
 import app.auth as auth
-from app.routes import selectiontables, datasets
+from app.routes import selectiontables, datasets, repositories, datasetparameters
 from app.database import (
     check_db_connection,
     engine,
@@ -46,7 +46,7 @@ allowed_prefix = "https://pr-"
 allowed_suffix = ".dnujuz98d63cz.amplifyapp.com"
 
 description = """
-Datalakes API connects you to lakes datasets and is managed by the SURF department at [EAWAG](https://www.eawag.ch).
+Datalakes API connects you to surface water datasets and is managed by the SURF department at [EAWAG](https://www.eawag.ch).
 
 This API serves as the backend for the website [www.datalakes.eawag.ch](http://www.datalakes.eawag.ch).
 
@@ -142,4 +142,6 @@ async def github_token(
     return {"access_token": token, "token_type": "bearer"}
 
 app.include_router(datasets.router)
+app.include_router(repositories.router)
+app.include_router(datasetparameters.router)
 app.include_router(selectiontables.router)

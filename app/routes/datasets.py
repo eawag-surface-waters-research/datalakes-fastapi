@@ -56,12 +56,12 @@ async def create_dataset(
     return dataset
 
 
-@router.put("/{dataset_id}", status_code=200)
+@router.patch("/{dataset_id}", status_code=200)
 async def update_dataset(
         dataset_id: int,
         dataset_in: DatasetsUpdate,
         session: SessionDep,
-        _: dict = Depends(check_member)
+        _: dict = Depends(check_dataset_permissions)
 ):
     """Update an existing dataset"""
     existing = await session.get(Datasets, dataset_id)

@@ -53,6 +53,26 @@ class DatasetsUpdate(DatasetsBase):
     mindatetime: Optional[datetime] = None
     maxdatetime: Optional[datetime] = None
 
+class Repositories(SQLModel, table=True):
+    __tablename__ = "repositories"
+    id: int | None = Field(default=None, primary_key=True)
+    ssh: str
+    branch: str
+
+class DatasetparametersBase(SQLModel):
+    datasets_id: int
+    parameters_id: int
+    sensors_id: Optional[int] = None
+    axis: str
+    parseparameter: str
+    unit: Optional[str] = None
+    link: Optional[int] = None
+    detail: Optional[str] = None
+
+class Datasetparameters(DatasetparametersBase, table=True):
+    __tablename__ = "datasetparameters"
+    id: int | None = Field(default=None, primary_key=True)
+
 class Parameters(SQLModel, table=True):
     __tablename__ = "parameters"
     id: int | None = Field(default=None, primary_key=True)
