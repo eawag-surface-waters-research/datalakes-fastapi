@@ -3,6 +3,8 @@ from sqlalchemy.types import TIMESTAMP, JSON
 from typing import Optional
 from datetime import datetime
 
+from app.functions import validate_ssh_url
+
 class DatasetsBase(SQLModel):
     title: Optional[str] = None
     description: Optional[str] = None
@@ -53,11 +55,34 @@ class DatasetsUpdate(DatasetsBase):
     mindatetime: Optional[datetime] = None
     maxdatetime: Optional[datetime] = None
 
-class Repositories(SQLModel, table=True):
+
+class RepositoriesBase(SQLModel):
+    ssh: str = Field(..., description="SSH URL for git repository (git@host:user/repo.git format)")
+    branch: Optional[str] = None
+
+    @classmethod
+    def get_allowed_domains(cls) -> List[str]:
+        """Override this method in subclasses to customize allowed domains."""
+        return [
+            "github.com",
+            "gitlab.com",
+            "bitbucket.org",
+            "gitlab.eawag.ch"
+        ]
+
+    @field_validator('ssh')
+    @classmethod
+    def validate_ssh_url(cls, v: str) -> str:
+        """
+        Validate SSH URL using the shared validator.
+        """
+        allowed_domains = cls.get_allowed_domains()
+        return validate_ssh_url(v, allowed_domains)
+
+
+class Repositories(RepositoriesBase, table=True):
     __tablename__ = "repositories"
     id: int | None = Field(default=None, primary_key=True)
-    ssh: str
-    branch: str
 
 class DatasetparametersBase(SQLModel):
     datasets_id: int

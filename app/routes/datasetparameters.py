@@ -38,7 +38,7 @@ async def create_datasetparameter(
         session: SessionDep,
         _: dict = Depends(check_member)
 ):
-    """Create a new dataset"""
+    """Create a new dataset parameter"""
     dataset = Datasetparameters.model_validate(dataset_in)
     session.add(dataset)
     await session.commit()

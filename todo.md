@@ -12,18 +12,18 @@
 | externaldata.js      | Delete |         |
 | maintenance.js       |        |         |
 | s3zip.js             |        |         |
-| convert.js           |        |         |
-| files.js             |        |         |
+| convert.js           | Delete |         |
+| files.js             | Delete |         |
 | monitor.js           | Delete |         |
 | selectiontables.js   | Done   |         |
 | data.js              |        |         |
 | gitclone.js          |        |         |
-| netcdf.js            |        |         |
+| netcdf.js            | Delete |         |
 | status.js            | Delete |         |
 | datalakesmodel.js    | Delete |         |
 | gitwebhook.js        | Delete |         |
 | pipeline.js          |        |         |
 | update.js            |        |         |
-| datasetparameters.js |        |         |
+| datasetparameters.js | Done   |         |
 | index.js             | Delete |         |
 | refresh.js           |        |         |

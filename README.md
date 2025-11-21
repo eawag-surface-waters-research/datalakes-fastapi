@@ -83,7 +83,7 @@ uvicorn app.main:app --host 0.0.0.0 --reload
 
 ## Run Tests
 
-Pytest can be directly run with FastAPI. Tests are located in the file `app/test_main.py`. 
+Pytest can be directly run with FastAPI. Tests are located in the file `app/tests.py`. 
 
 ### Install pytest
 
@@ -93,7 +93,7 @@ pip install pytest
 
 ### Run tests
 
-Navigate to the top directory of the repository to run pytest.
+Navigate to the top directory of the repository to run pytest. You need to make sure the database container is running.
 
 ```console
 conda activate fastapi
