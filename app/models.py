@@ -155,3 +155,33 @@ class Licenses(SQLModel, table=True):
     name: str
     description: str
     link: str
+
+
+class MaintenanceBase(SQLModel):
+    state: Optional[str] = None
+    issue: Optional[str] = None
+    request: Optional[str] = None
+    depths: Optional[str] = None
+    description: Optional[str] = None
+
+
+class Maintenance(DatasetsBase, table=True):
+    __tablename__ = "maintenance"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    starttime: Optional[datetime] = Field(default=None, sa_type=TIMESTAMP(timezone=True))
+    endtime: Optional[datetime] = Field(default=None, sa_type=TIMESTAMP(timezone=True))
+
+
+class MaintenanceCreate(DatasetsBase):
+    parameters_id: int
+    starttime: datetime
+    endtime: datetime
+    reporter: str
+    datasets_id: int
+    datasets_parameters_id: int
+
+
+class MaintenanceUpdate(DatasetsBase):
+
+    mindatetime: Optional[datetime] = None
+    maxdatetime: Optional[datetime] = None
