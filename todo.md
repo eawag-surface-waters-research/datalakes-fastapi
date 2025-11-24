@@ -17,7 +17,7 @@
 | monitor.js           | Delete |           |
 | selectiontables.js   | Done   |           |
 | data.js              |        | See below |
-| gitclone.js          |        |           |
+| gitclone.js          | Delete |           |
 | netcdf.js            | Delete |           |
 | status.js            | Delete |           |
 | datalakesmodel.js    | Delete |           |

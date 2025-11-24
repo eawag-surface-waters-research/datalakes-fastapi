@@ -25,37 +25,9 @@ SET row_security = off;
 
 ALTER SCHEMA public OWNER TO datalakes;
 
---
--- Name: clonestatus_id_seq; Type: SEQUENCE; Schema: public; Owner: datalakes
---
-
-CREATE SEQUENCE public.clonestatus_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    MAXVALUE 2147483647
-    CACHE 1;
-
-
-ALTER SEQUENCE public.clonestatus_id_seq OWNER TO datalakes;
-
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
-
---
--- Name: clonestatus; Type: TABLE; Schema: public; Owner: datalakes
---
-
-CREATE TABLE public.clonestatus (
-    id integer DEFAULT nextval('public.clonestatus_id_seq'::regclass) NOT NULL,
-    status character varying,
-    message character varying,
-    repositories_id integer
-);
-
-
-ALTER TABLE public.clonestatus OWNER TO datalakes;
 
 --
 -- Name: datasetparameters_id_seq; Type: SEQUENCE; Schema: public; Owner: datalakes
@@ -458,7 +430,8 @@ ALTER SEQUENCE public.repositories_id_seq OWNER TO datalakes;
 CREATE TABLE public.repositories (
     id integer DEFAULT nextval('public.repositories_id_seq'::regclass) NOT NULL,
     ssh character varying,
-    branch character varying
+    branch character varying,
+    status character varying
 );
 
 
@@ -534,14 +507,6 @@ ALTER TABLE ONLY public.projects ALTER COLUMN id SET DEFAULT nextval('public.pro
 --
 
 ALTER TABLE ONLY public.sensors ALTER COLUMN id SET DEFAULT nextval('public.sensor_id_seq'::regclass);
-
-
---
--- Name: clonestatus clonestatus_pkey; Type: CONSTRAINT; Schema: public; Owner: datalakes
---
-
-ALTER TABLE ONLY public.clonestatus
-    ADD CONSTRAINT clonestatus_pkey PRIMARY KEY (id);
 
 
 --

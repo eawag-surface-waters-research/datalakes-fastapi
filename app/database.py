@@ -1,7 +1,7 @@
 import asyncio
 from sqlalchemy import text
 from sqlmodel.ext.asyncio.session import AsyncSession
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine, async_sessionmaker
 from sqlalchemy.pool import NullPool
 from typing import Annotated, AsyncGenerator
 from fastapi import Depends
@@ -26,6 +26,8 @@ engine: AsyncEngine = create_async_engine(
     future=True,
     poolclass=NullPool if not PRODUCTION else None
 )
+
+async_session_maker = async_sessionmaker(engine, expire_on_commit=False)
 
 def get_safe_db_url(url: str) -> str:
     """Return database URL with password masked"""

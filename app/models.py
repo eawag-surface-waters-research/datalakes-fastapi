@@ -1,5 +1,6 @@
 from sqlmodel import SQLModel, Field, Column
 from sqlalchemy.types import TIMESTAMP, JSON
+from pydantic import field_validator
 from typing import Optional
 from datetime import datetime
 
@@ -55,13 +56,12 @@ class DatasetsUpdate(DatasetsBase):
     mindatetime: Optional[datetime] = None
     maxdatetime: Optional[datetime] = None
 
-
 class RepositoriesBase(SQLModel):
     ssh: str = Field(..., description="SSH URL for git repository (git@host:user/repo.git format)")
     branch: Optional[str] = None
 
     @classmethod
-    def get_allowed_domains(cls) -> List[str]:
+    def get_allowed_domains(cls) -> list[str]:
         """Override this method in subclasses to customize allowed domains."""
         return [
             "github.com",
@@ -79,10 +79,10 @@ class RepositoriesBase(SQLModel):
         allowed_domains = cls.get_allowed_domains()
         return validate_ssh_url(v, allowed_domains)
 
-
 class Repositories(RepositoriesBase, table=True):
     __tablename__ = "repositories"
     id: int | None = Field(default=None, primary_key=True)
+    status: Optional[str] = None
 
 class DatasetparametersBase(SQLModel):
     datasets_id: int
