@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlmodel import select
 from pathlib import Path
 import logging

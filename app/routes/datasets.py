@@ -24,15 +24,10 @@ async def get_all_datasets(session: SessionDep):
 @router.get("/{datasets_id}")
 async def get_dataset(datasets_id: int, session: SessionDep):
     """Get specific dataset"""
-    result = await session.exec(
-        select(Datasets).where(Datasets.id == datasets_id)
-    )
-    dataset = result.first()
-
-    if not dataset:
+    existing = await session.get(Datasets, datasets_id)
+    if not existing:
         raise HTTPException(status_code=404, detail="Dataset not found")
-
-    return dataset
+    return existing
 
 @router.post("/", status_code=201)
 async def create_dataset(

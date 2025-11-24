@@ -84,6 +84,31 @@ class Repositories(RepositoriesBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
     status: Optional[str] = None
 
+class MaintenanceBase(SQLModel):
+    parameters_id: int
+    datasets_id: int
+    datasetparameters_id: int
+    depths: Optional[str] = None
+    description: Optional[str] = None
+    reporter: Optional[str] = None
+    state: Optional[str] = None
+    issue: Optional[str] = None
+    request: Optional[str] = None
+
+class MaintenanceCreate(DatasetsBase):
+    starttime: Optional[datetime] = None
+    endtime: Optional[datetime] = None
+
+class MaintenanceUpdate(DatasetsBase):
+    starttime: Optional[datetime] = None
+    endtime: Optional[datetime] = None
+
+class Maintenance(RepositoriesBase, table=True):
+    __tablename__ = "maintenance"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    starttime: Optional[datetime] = Field(default=None, sa_type=TIMESTAMP(timezone=True))
+    endtime: Optional[datetime] = Field(default=None, sa_type=TIMESTAMP(timezone=True))
+
 class DatasetparametersBase(SQLModel):
     datasets_id: int
     parameters_id: int
