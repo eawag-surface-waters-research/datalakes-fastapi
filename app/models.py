@@ -85,9 +85,6 @@ class Repositories(RepositoriesBase, table=True):
     status: Optional[str] = None
 
 class MaintenanceBase(SQLModel):
-    parameters_id: int
-    datasets_id: int
-    datasetparameters_id: int
     depths: Optional[str] = None
     description: Optional[str] = None
     reporter: Optional[str] = None
@@ -95,17 +92,26 @@ class MaintenanceBase(SQLModel):
     issue: Optional[str] = None
     request: Optional[str] = None
 
-class MaintenanceCreate(DatasetsBase):
+class MaintenanceCreate(MaintenanceBase):
+    datasets_id: int
+    parameters_id: int
+    datasetparameters_id: int
     starttime: Optional[datetime] = None
     endtime: Optional[datetime] = None
 
-class MaintenanceUpdate(DatasetsBase):
+class MaintenanceUpdate(MaintenanceBase):
+    datasets_id: Optional[int] = None
+    parameters_id: Optional[int] = None
+    datasetparameters_id: Optional[int] = None
     starttime: Optional[datetime] = None
     endtime: Optional[datetime] = None
 
-class Maintenance(RepositoriesBase, table=True):
+class Maintenance(MaintenanceBase, table=True):
     __tablename__ = "maintenance"
     id: Optional[int] = Field(default=None, primary_key=True)
+    datasets_id: int
+    parameters_id: int
+    datasetparameters_id: int
     starttime: Optional[datetime] = Field(default=None, sa_type=TIMESTAMP(timezone=True))
     endtime: Optional[datetime] = Field(default=None, sa_type=TIMESTAMP(timezone=True))
 
@@ -180,33 +186,3 @@ class Licenses(SQLModel, table=True):
     name: str
     description: str
     link: str
-
-
-class MaintenanceBase(SQLModel):
-    state: Optional[str] = None
-    issue: Optional[str] = None
-    request: Optional[str] = None
-    depths: Optional[str] = None
-    description: Optional[str] = None
-
-
-class Maintenance(DatasetsBase, table=True):
-    __tablename__ = "maintenance"
-    id: Optional[int] = Field(default=None, primary_key=True)
-    starttime: Optional[datetime] = Field(default=None, sa_type=TIMESTAMP(timezone=True))
-    endtime: Optional[datetime] = Field(default=None, sa_type=TIMESTAMP(timezone=True))
-
-
-class MaintenanceCreate(DatasetsBase):
-    parameters_id: int
-    starttime: datetime
-    endtime: datetime
-    reporter: str
-    datasets_id: int
-    datasets_parameters_id: int
-
-
-class MaintenanceUpdate(DatasetsBase):
-
-    mindatetime: Optional[datetime] = None
-    maxdatetime: Optional[datetime] = None

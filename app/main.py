@@ -12,7 +12,7 @@ import sentry_sdk
 from dotenv import load_dotenv
 
 import app.auth as auth
-from app.routes import selectiontables, datasets, repositories, datasetparameters
+from app.routes import selectiontables, datasets, repositories, datasetparameters, maintenance
 from app.database import (
     check_db_connection,
     engine,
@@ -145,3 +145,4 @@ app.include_router(datasets.router)
 app.include_router(repositories.router)
 app.include_router(datasetparameters.router)
 app.include_router(selectiontables.router)
+app.include_router(maintenance.router)

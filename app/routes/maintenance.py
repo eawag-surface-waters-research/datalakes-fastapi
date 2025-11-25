@@ -17,7 +17,7 @@ async def get_maintenance(maintenance_id: int, session: SessionDep):
         raise HTTPException(status_code=404, detail="Maintenance not found")
     return existing
 
-@router.get("/{datasets_id}")
+@router.get("/dataset/{datasets_id}")
 async def get_dataset_maintenance(datasets_id: int, session: SessionDep):
     """Get all maintenance for a dataset"""
     result = await session.exec(
