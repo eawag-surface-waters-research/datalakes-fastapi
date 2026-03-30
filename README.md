@@ -103,4 +103,4 @@ pytest
 
 [mit-by]: https://opensource.org/licenses/MIT
 [mit-by-shield]: https://img.shields.io/badge/License-MIT-g.svg
-[python-by-shield]: https://img.shields.io/badge/Python-3.9-g
+[python-by-shield]: https://img.shields.io/badge/Python-3.11-g
