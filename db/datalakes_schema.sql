@@ -114,7 +114,8 @@ CREATE TABLE public.datasets (
     password character varying,
     accompanyingdata character varying,
     dataportal character varying,
-    monitor integer
+    monitor integer,
+    eventsfile character varying
 );
 
 
