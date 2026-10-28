@@ -1,0 +1,4 @@
+# This file contains a list of commit hashes that should be ignored by git blame
+
+# formatted all files with ruff
+19d1f65a074c094447c2ce4220ea9452aaea649b
