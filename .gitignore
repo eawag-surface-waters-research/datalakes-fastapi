@@ -7,3 +7,4 @@ app/tests/__pycache__
 notebooks
 filesystem/*
 !filesystem/.gitkeep
+.venv

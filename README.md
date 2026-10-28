@@ -63,44 +63,53 @@ own datasets (limited rights).
 
 ## Local Development
 
-### 1. Install virtual environment
+Dependencies are managed with [uv](https://docs.astral.sh/uv/). They are declared in `pyproject.toml` and locked in 
+`uv.lock`.
+
+### 1. Install uv
+
+Follow the official install instructions [here](https://docs.astral.sh/uv/getting-started/installation/)
+
+### 2. Install dependencies
+
+uv creates a virtual environment in `.venv` with Python 3.14 (automatically downloaded if needed) and installs the locked 
+dependencies, including the dev dependencies such as pytest.
 
 ```console
-conda create --name fastapi python=3.11
-conda activate fastapi
-pip install -r requirements.txt
+uv sync
 ```
 
-### 2. Run API
+### 3. Run API
 
 Manually set filesystem path in main.py if files are NOT located in the `filesystem` folder within the repository.
 
 ```console
-conda activate fastapi
 docker compose -f docker-compose.db.yml up -d
-uvicorn app.main:app --host 0.0.0.0 --reload
+uv run uvicorn app.main:app --host 0.0.0.0 --reload
+```
+
+### Manage dependencies
+
+Add or remove packages with uv rather than pip, so `pyproject.toml` and `uv.lock` stay in sync. Commit both files.
+
+```console
+uv add <package>
+uv add --dev <package>
+uv remove <package>
+uv lock --upgrade
 ```
 
 ## Run Tests
 
-Pytest can be directly run with FastAPI. Tests are located in the file `app/tests.py`. 
-
-### Install pytest
-
-```console
-pip install pytest
-```
-
-### Run tests
+Pytest can be directly run with FastAPI. Tests are located in the folder `app/tests`. 
 
 Navigate to the top directory of the repository to run pytest. You need to make sure the database container is running.
 
 ```console
-conda activate fastapi
-docker compose -f docker-compose.db.yml up
-pytest
+docker compose -f docker-compose.db.yml up -d
+uv run pytest
 ```
 
 [mit-by]: https://opensource.org/licenses/MIT
 [mit-by-shield]: https://img.shields.io/badge/License-MIT-g.svg
-[python-by-shield]: https://img.shields.io/badge/Python-3.11-g
+[python-by-shield]: https://img.shields.io/badge/Python-3.14-g
