@@ -35,26 +35,26 @@ Implementing remote.py
 
 User can provide rclone or link (if .bucket is in repo then pre-populate rclone info - but allow edits)
 
-rclone 
+rclone
 - Provide dataset_id, rclone config and prefix
 - Add to rclone config and return a list of files
 - On front end if there are folders in the list of returned file offer to select a sub folder
-- Sync that folder to data / dataset_id 
+- Sync that folder to data / dataset_id
 
 link
-- Provide link and dataset_id 
+- Provide link and dataset_id
 - Download link unzip and return a list of files
 
-Parse the first netcdf file (structure code to allow other file types in future) 
+Parse the first netcdf file (structure code to allow other file types in future)
 Return it to the client to add datasetparameters for the dataset
 
-Test that all files can be parsed using the datset parameters and add them to the files table with start and end date 
+Test that all files can be parsed using the datset parameters and add them to the files table with start and end date
 
 Create a latest data .json file that is like a cache - upload to R2
 
 Add endpoints for accessing data
 
-Clone to staging - get new data before 
+Clone to staging - get new data before
 overwriting production else send an sentry error
 
 For 2D datasets create a virtualzarr for each period where depth axis is the same

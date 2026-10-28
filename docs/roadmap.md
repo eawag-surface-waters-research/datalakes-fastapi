@@ -32,7 +32,7 @@ It is a starting point, not a contract. You own it from now on:
 
 ## Background
 
-[Datalakes](https://www.datalakes.eawag.ch) publishes environmental datasets (mostly lake monitoring data) from Eawag's SURF department. The current backend is a [Node.js API](https://github.com/eawag-surface-waters-research/datalakes-nodejs). It converts every NetCDF file into a JSON file on disk, and the website fetches those files one at a time and stitches them together in the browser. This is slow, it cannot answer simple questions like "give me temperature at 0–10 m for March", and the data model is tied to lakes. The API is also a nightmare for people to try and access and connect to 
+[Datalakes](https://www.datalakes.eawag.ch) publishes environmental datasets (mostly lake monitoring data) from Eawag's SURF department. The current backend is a [Node.js API](https://github.com/eawag-surface-waters-research/datalakes-nodejs). It converts every NetCDF file into a JSON file on disk, and the website fetches those files one at a time and stitches them together in the browser. This is slow, it cannot answer simple questions like "give me temperature at 0–10 m for March", and the data model is tied to lakes. The API is also a nightmare for people to try and access and connect to
 so this needs to be improved.
 
 This repository (`fastapi/`) is the replacement. The goal is an API that:

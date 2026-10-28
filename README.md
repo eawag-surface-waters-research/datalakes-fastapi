@@ -29,7 +29,7 @@ mkdir -p filesystem
 ```
 
 ### 3. Create .env file
-Replace example filesystem path with correct path. For local development this is likely to be the `filesystem` folder 
+Replace example filesystem path with correct path. For local development this is likely to be the `filesystem` folder
 within the repository. For production environments this may be on another drive.
 ```console
 cd datalakes-fastapi
@@ -53,17 +53,17 @@ docker compose up --build -d
 
 ## Authentication
 
-Authentication uses OAuth2 with the GitHub API. GET requests are public however; POST, PUT & DELETE requests require 
+Authentication uses OAuth2 with the GitHub API. GET requests are public however; POST, PUT & DELETE requests require
 login with a GitHub account. This can be done using the Swagger documentation or via the Datalakes website.
 
 Permissions are controlled using the Datalakes GitHub team: https://github.com/orgs/eawag-surface-waters-research/teams/datalakes
 
-Maintainers of the Datalakes team have full admin rights whereas members are only able to add and edit only their 
+Maintainers of the Datalakes team have full admin rights whereas members are only able to add and edit only their
 own datasets (limited rights).
 
 ## Local Development
 
-Dependencies are managed with [uv](https://docs.astral.sh/uv/). They are declared in `pyproject.toml` and locked in 
+Dependencies are managed with [uv](https://docs.astral.sh/uv/). They are declared in `pyproject.toml` and locked in
 `uv.lock`.
 
 ### 1. Install uv
@@ -72,7 +72,7 @@ Follow the official install instructions [here](https://docs.astral.sh/uv/gettin
 
 ### 2. Install dependencies
 
-uv creates a virtual environment in `.venv` with Python 3.14 (automatically downloaded if needed) and installs the locked 
+uv creates a virtual environment in `.venv` with Python 3.14 (automatically downloaded if needed) and installs the locked
 dependencies, including the dev dependencies such as pytest.
 
 ```console
@@ -111,7 +111,7 @@ uv lock --upgrade
 
 ## Run Tests
 
-Pytest can be directly run with FastAPI. Tests are located in the folder `app/tests`. 
+Pytest can be directly run with FastAPI. Tests are located in the folder `app/tests`.
 
 Navigate to the top directory of the repository to run pytest. You need to make sure the database container is running.
 

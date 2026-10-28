@@ -296,4 +296,3 @@ SELECT pg_catalog.setval('public.sensor_id_seq', 16, true);
 --
 -- PostgreSQL database dump complete
 --
-

@@ -1,88 +1,91 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.auth import check_member, check_dataset_permissions
+from app.auth import check_dataset_permissions, check_member
 from app.main import app
 
+
 def override_check_member():
-    return {"user_id": 1, "role": "member"}  # Mock user data
+  return {"user_id": 1, "role": "member"}  # Mock user data
+
 
 app.dependency_overrides[check_member] = override_check_member
 app.dependency_overrides[check_dataset_permissions] = override_check_member
 
+
 @pytest.fixture(scope="session")
 def anyio_backend():
-    return "asyncio"
+  return "asyncio"
+
 
 @pytest.mark.anyio
 async def test_dataset_lifecycle():
-    example_data = {
-        "title": "Example Dataset",
-        "description": "Example description",
-        "owner": "Example Owner",
-        "origin": "Measurement",
-        "mapplot": "marker",
-        "mapplotfunction": "gitPlot",
-        "datasource": "internal",
-        "datasourcelink": "datalakes-test/data/Level1/L1_Meteostation_20250901_000000.nc",
-        "plotproperties": {"colors":"Rainbow",
-                           "markerLabel":True,
-                           "markerSymbol":"circle",
-                           "markerFixedSize":True,
-                           "markerSize":20,
-                           "vectorMagnitude":False,
-                           "vectorArrows":False,
-                           "vectorFlow":False,
-                           "vectorArrowColor":False,
-                           "vectorFlowColor":False,
-                           "legend":False},
-        "citation": "Please get in touch for citation",
-        "downloads": 1,
-        "fileconnect": "time",
-        "liveconnect": "true",
-        "renku": 1,
-        "prefile": "",
-        "prescript": "",
-        "mindatetime": "2025-09-01T07:07:28.796000Z",
-        "maxdatetime": "2025-11-02T07:07:28.796000Z",
-        "mindepth": 0.0,
-        "maxdepth": 0.0,
-        "latitude": 46.5,
-        "longitude": 6.67,
-        "licenses_id": 1,
-        "organisations_id": 1,
-        "repositories_id": 1,
-        "lakes_id": 1,
-        "persons_id": 1,
-        "projects_id": 1,
-        "embargo": 1,
-        "password": "",
-        "accompanyingdata": "",
-        "dataportal": None,
-        "monitor": None
-    }
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as ac:
-        response = await ac.post("/datasets/", json={})
-        assert response.status_code == 201
-        datasets_id = response.json()["id"]
+  example_data = {
+    "title": "Example Dataset",
+    "description": "Example description",
+    "owner": "Example Owner",
+    "origin": "Measurement",
+    "mapplot": "marker",
+    "mapplotfunction": "gitPlot",
+    "datasource": "internal",
+    "datasourcelink": "datalakes-test/data/Level1/L1_Meteostation_20250901_000000.nc",
+    "plotproperties": {
+      "colors": "Rainbow",
+      "markerLabel": True,
+      "markerSymbol": "circle",
+      "markerFixedSize": True,
+      "markerSize": 20,
+      "vectorMagnitude": False,
+      "vectorArrows": False,
+      "vectorFlow": False,
+      "vectorArrowColor": False,
+      "vectorFlowColor": False,
+      "legend": False,
+    },
+    "citation": "Please get in touch for citation",
+    "downloads": 1,
+    "fileconnect": "time",
+    "liveconnect": "true",
+    "renku": 1,
+    "prefile": "",
+    "prescript": "",
+    "mindatetime": "2025-09-01T07:07:28.796000Z",
+    "maxdatetime": "2025-11-02T07:07:28.796000Z",
+    "mindepth": 0.0,
+    "maxdepth": 0.0,
+    "latitude": 46.5,
+    "longitude": 6.67,
+    "licenses_id": 1,
+    "organisations_id": 1,
+    "repositories_id": 1,
+    "lakes_id": 1,
+    "persons_id": 1,
+    "projects_id": 1,
+    "embargo": 1,
+    "password": "",
+    "accompanyingdata": "",
+    "dataportal": None,
+    "monitor": None,
+  }
+  async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+    response = await ac.post("/datasets/", json={})
+    assert response.status_code == 201
+    datasets_id = response.json()["id"]
 
-        response = await ac.patch(f"/datasets/{datasets_id}", json=example_data)
-        assert response.status_code == 200
-        data = response.json()
-        for key, value in example_data.items():
-            assert data[key] == value
+    response = await ac.patch(f"/datasets/{datasets_id}", json=example_data)
+    assert response.status_code == 200
+    data = response.json()
+    for key, value in example_data.items():
+      assert data[key] == value
 
-        response = await ac.get(f"/datasets/{datasets_id}")
-        assert response.status_code == 200
-        data = response.json()
-        for key, value in example_data.items():
-            assert data[key] == value
+    response = await ac.get(f"/datasets/{datasets_id}")
+    assert response.status_code == 200
+    data = response.json()
+    for key, value in example_data.items():
+      assert data[key] == value
 
-        response = await ac.get("/datasets/")
-        assert response.status_code == 200
+    response = await ac.get("/datasets/")
+    assert response.status_code == 200
 
-        response = await ac.delete(f"/datasets/{datasets_id}")
-        assert response.status_code == 204
-
+    response = await ac.delete(f"/datasets/{datasets_id}")
+    assert response.status_code == 204

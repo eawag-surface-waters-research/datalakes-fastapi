@@ -1,47 +1,35 @@
-from typing import Annotated
-from fastapi import FastAPI, Request, Form
-from fastapi.responses import JSONResponse
-from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-
+import logging
 import os
 import sys
-import logging
+from contextlib import asynccontextmanager
+from typing import Annotated
+
 import sentry_sdk
 from dotenv import load_dotenv
+from fastapi import FastAPI, Form, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
 
-import app.auth as auth
-from app.routes import selectiontables, datasets, repositories, datasetparameters, maintenance, remote
-from app.database import (
-    check_db_connection,
-    engine,
-    DATABASE_URL,
-    get_safe_db_url
-)
+from app import auth
+from app.database import DATABASE_URL, check_db_connection, engine, get_safe_db_url
+from app.routes import datasetparameters, datasets, maintenance, remote, repositories, selectiontables
 
 load_dotenv()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(levelname)s:     %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(message)s")
+logger = logging.getLogger(__name__)
 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
 PRODUCTION = os.getenv("PRODUCTION", "false").lower() == "true"
 
 if PRODUCTION:
-    sentry_sdk.init(
-        dsn="https://71eb5021a774490f9e1c273e06fc33de@o1106970.ingest.us.sentry.io/4509836725125120",
-        traces_sample_rate=1.0,
-    )
+  sentry_sdk.init(
+    dsn="https://71eb5021a774490f9e1c273e06fc33de@o1106970.ingest.us.sentry.io/4509836725125120",
+    traces_sample_rate=1.0,
+  )
 
-origins = [
-    "http://localhost:3000",
-    "https://www.alplakes.eawag.ch",
-    "https://www.datalakes-eawag.ch",
-    "https://www.datalakes.eawag.ch"
-]
+origins = ["http://localhost:3000", "https://www.alplakes.eawag.ch", "https://www.datalakes-eawag.ch", "https://www.datalakes.eawag.ch"]
 allowed_prefix = "https://pr-"
 allowed_suffix = ".dnujuz98d63cz.amplifyapp.com"
 
@@ -61,85 +49,94 @@ Additionally, we cannot guarantee continuous availability of the API. Service di
 For bug reports, collaboration requests, or to join our mailing list for updates, feel free to [get in touch](mailto:james.runnalls@eawag.ch).
 """
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logging.info("Application startup...")
-    logging.info(f"Database: {get_safe_db_url(DATABASE_URL)}")
-    logging.info("Testing database connection...")
-    if not await check_db_connection(max_retries=3, retry_delay=2):
-        logging.warning("FATAL ERROR: Cannot connect to database!")
-        await engine.dispose()
-        sys.exit(1)
-    logging.info("Database connection successful!")
-    logging.info("Application ready.")
-
-    yield
-
-    logging.info("Shutting down application...")
+  logger.info("Application startup...")
+  logger.info(f"Database: {get_safe_db_url(DATABASE_URL)}")
+  logger.info("Testing database connection...")
+  if not await check_db_connection(max_retries=3, retry_delay=2):
+    logger.warning("FATAL ERROR: Cannot connect to database!")
     await engine.dispose()
-    logging.info("Database connections closed")
-    logging.info("Shutdown complete.")
+    sys.exit(1)
+  logger.info("Database connection successful!")
+  logger.info("Application ready.")
+
+  yield
+
+  logger.info("Shutting down application...")
+  await engine.dispose()
+  logger.info("Database connections closed")
+  logger.info("Shutdown complete.")
+
 
 app = FastAPI(
-    title="Datalakes API",
-    lifespan=lifespan,
-    description=description,
-    swagger_ui_init_oauth={
-        "clientId": GITHUB_CLIENT_ID,
-        "appName": "GitHub OAuth API",
-    },
-    version="2.0.0",
-    contact={
-        "name": "James Runnalls",
-        "email": "james.runnalls@eawag.ch",
-    },
-    license_info={
-        "name": "Apache 2.0",
-        "url": "https://www.apache.org/licenses/LICENSE-2.0.html",
-    }
+  title="Datalakes API",
+  lifespan=lifespan,
+  description=description,
+  swagger_ui_init_oauth={
+    "clientId": GITHUB_CLIENT_ID,
+    "appName": "GitHub OAuth API",
+  },
+  version="2.0.0",
+  contact={
+    "name": "James Runnalls",
+    "email": "james.runnalls@eawag.ch",
+  },
+  license_info={
+    "name": "Apache 2.0",
+    "url": "https://www.apache.org/licenses/LICENSE-2.0.html",
+  },
 )
 
+
 class DynamicCORSMiddleware(CORSMiddleware):
-    def is_allowed_origin(self, origin: str) -> bool:
-        return (
-            origin in origins or
-            (origin.startswith(allowed_prefix) and origin.endswith(allowed_suffix))
-        )
+  def is_allowed_origin(self, origin: str) -> bool:
+    return origin in origins or (origin.startswith(allowed_prefix) and origin.endswith(allowed_suffix))
+
 
 app.add_middleware(
-    DynamicCORSMiddleware,
-    allow_origins=origins,  # Still allow the fixed ones
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+  DynamicCORSMiddleware,
+  allow_origins=origins,  # Still allow the fixed ones
+  allow_credentials=True,
+  allow_methods=["*"],
+  allow_headers=["*"],
 )
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
+
 @app.exception_handler(ValueError)
 async def value_error_exception_handler(request: Request, exc: ValueError):
-    print(exc)
-    return JSONResponse(
-        status_code=500,
-        content={"message": "Server processing error - please check your inputs. The developer has been notified, for "
-                            "updates on bug fixes please contact James Runnalls (james.runnall@eawag.ch)"})
+  print(exc)
+  return JSONResponse(
+    status_code=500,
+    content={
+      "message": "Server processing error - please check your inputs. The developer has been notified, for "
+      "updates on bug fixes please contact James Runnalls (james.runnalls@eawag.ch)"
+    },
+  )
 
 
 @app.get("/", include_in_schema=False)
 def welcome():
-    return {"Welcome to the Datalakes API from Eawag. Navigate to /docs or /redoc for documentation. For "
-            "queries please contact James Runnalls (james.runnall@eawag.ch)."}
+  return {
+    (
+      "Welcome to the Datalakes API from Eawag. Navigate to /docs or /redoc for documentation. For "
+      "queries please contact James Runnalls (james.runnalls@eawag.ch)."
+    )
+  }
+
 
 @app.post("/api/auth/token", tags=["Authentication"], summary="Swagger UI OAuth2 Token Exchange", include_in_schema=False)
-async def github_token(
-    code: Annotated[str, Form(..., description="The authorization code from GitHub.")]
-):
-    """
-    Handles the token exchange from the authorization code.
-    This endpoint is designed specifically to be called by the Swagger UI.
-    It returns a token in the format expected by Swagger UI's authorization flow.
-    """
-    token = await auth.get_access_token(code)
-    return {"access_token": token, "token_type": "bearer"}
+async def github_token(code: Annotated[str, Form(..., description="The authorization code from GitHub.")]):
+  """
+  Handles the token exchange from the authorization code.
+  This endpoint is designed specifically to be called by the Swagger UI.
+  It returns a token in the format expected by Swagger UI's authorization flow.
+  """
+  token = await auth.get_access_token(code)
+  return {"access_token": token, "token_type": "bearer"}
+
 
 app.include_router(datasets.router)
 app.include_router(repositories.router)
