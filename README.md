@@ -88,6 +88,16 @@ docker compose -f docker-compose.db.yml up -d
 uv run uvicorn app.main:app --host 0.0.0.0 --reload
 ```
 
+### 4. Contribute
+
+Before contributing, If you want to contribute to the codebase, please install the pre-commit hooks by running:
+
+```console
+pre-commit install
+```
+
+This will execute a set of checks before each commit, helping to maintain code quality and consistency in the project.
+
 ### Manage dependencies
 
 Add or remove packages with uv rather than pip, so `pyproject.toml` and `uv.lock` stay in sync. Commit both files.

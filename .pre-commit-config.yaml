@@ -1,0 +1,26 @@
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v6.0.0
+  hooks:
+  - id: trailing-whitespace
+    name: Remove trailing whitespace
+  - id: end-of-file-fixer
+    name: Ensure file ends with a newline
+  - id: check-added-large-files
+    name: Warn about large files being added to git
+  - id: check-case-conflict
+    name: Warn about files that would cause case conflicts on case-insensitive filesystems
+- repo: local
+  hooks:
+  - id: ruff-format
+    name: Run ruff format
+    entry: bash -c 'ruff format'
+    language: system
+  - id: ruff-check
+    name: Run ruff check
+    entry: bash -c 'ruff check'
+    language: system
+  - id: ruff-fix
+    name: Run ruff fix
+    entry: bash -c 'ruff check --fix'
+    language: system
