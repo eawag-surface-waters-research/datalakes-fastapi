@@ -1,5 +1,6 @@
 import asyncio
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,22 @@ from app.main import app
 load_dotenv()
 
 FILESYSTEM = os.getenv("FILESYSTEM")
+REPO_SSH = "git@github.com:LeXPLORE-Platform/Meteostation.git"
+
+
+def github_ssh_available() -> bool:
+  """Cloning over SSH needs a GitHub SSH key and outbound port 22."""
+  try:
+    result = subprocess.run(
+      ["git", "ls-remote", REPO_SSH, "HEAD"],
+      check=False,
+      capture_output=True,
+      timeout=15,
+      env={**os.environ, "GIT_SSH_COMMAND": "ssh -o BatchMode=yes"},
+    )
+  except subprocess.TimeoutExpired, OSError:
+    return False
+  return result.returncode == 0
 
 
 def override_check():
@@ -37,8 +54,9 @@ async def test_repositories():
 
 
 @pytest.mark.anyio
+@pytest.mark.skipif(not github_ssh_available(), reason="GitHub is not reachable over SSH (no SSH key or port 22 blocked)")
 async def test_add_repositories():
-  repo_ssh = "git@github.com:LeXPLORE-Platform/Meteostation.git"
+  repo_ssh = REPO_SSH
   async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
     response = await ac.get("/repositories/")
     assert response.status_code == 200
@@ -55,7 +73,7 @@ async def test_add_repositories():
       status = response.json()["status"]
       if status == "success":
         break
-      elif status == "failure":
+      elif status == "failed":
         raise ValueError("Something failed cloning the repository")
       elif status != "updating":
         raise ValueError("Incorrect values in the database")

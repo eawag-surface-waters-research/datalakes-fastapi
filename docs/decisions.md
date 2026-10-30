@@ -19,7 +19,8 @@ Each entry has a status:
 | 6   | [Hidden datasets are migrated](#6-hidden-datasets-are-migrated)                                          | Decided |
 | 7   | [Datasets 1 and 16 are not migrated; link datasets](#7-datasets-1-and-16-are-not-migrated-link-datasets) | Decided |
 | 8   | [Embargoed datasets are migrated without embargo](#8-embargoed-datasets-are-migrated-without-embargo)    | Decided |
-| 9   | [Leave out authentication for now?](#9-leave-out-authentication-for-now)                                 | Proposed    |
+| 9   | [Leave out authentication for now?](#9-leave-out-authentication-for-now)                                 | Decided |
+| 10  | [A Postgres-backed job queue](#10-a-postgres-backed-job-queue)                                           | Decided |
 
 ---
 
@@ -132,13 +133,26 @@ Decided on 2026-10-28.
 
 ## 9. Leave out authentication for now?
 
-Proposed since 2026-10-28.
+Decided on 2026-10-29.
 
 **Question:** Can we leave out authentication for now and add it later in the project? It makes development and testing easier.
 
-**Answer:** Not answered yet.
+**Answer:** Yes. Remove it completely for now and add it back later. Sign-in will be with GitHub. Users can create datasets and modify their own; owners can modify all datasets. Owners are GitHub users in a dedicated GitHub team.
 
-**What this would mean:**
+**What this means:**
 
-- All endpoints, including writes, syncs and maintainer endpoints, are open during development. The GitHub login in [app/auth.py](../app/auth.py) is switched off.
+- All endpoints, including writes, syncs and maintainer endpoints, are open during development. The GitHub login code in [app/auth.py](../app/auth.py) is removed.
 - Authentication, including the tokens the Airflow pipelines use to trigger syncs, must be in place before the switch-over.
+
+## 10. A Postgres-backed job queue
+
+Decided on 2026-10-30.
+
+**Question:** Should the worker's job queue be backed by Postgres (e.g. procrastinate, or a `jobs` table) or by Redis?
+
+**Answer:** Postgres.
+
+**What this means:**
+
+- No extra service for the queue. Jobs survive restarts, and job history lives in the same database as the datasets.
+- Redis stays a pure cache that can safely evict entries.

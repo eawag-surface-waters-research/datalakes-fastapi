@@ -8,3 +8,4 @@ notebooks
 filesystem/*
 !filesystem/.gitkeep
 .venv
+.githooks

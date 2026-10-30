@@ -52,7 +52,7 @@ async def create_section_table_row(
   try:
     new_row = model.model_validate(data)
   except ValidationError as e:
-    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=e.errors())
+    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=e.errors())
 
   session.add(new_row)
   await session.commit()
