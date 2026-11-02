@@ -21,6 +21,7 @@ Each entry has a status:
 | 8   | [Embargoed datasets are migrated without embargo](#8-embargoed-datasets-are-migrated-without-embargo)    | Decided |
 | 9   | [Leave out authentication for now?](#9-leave-out-authentication-for-now)                                 | Decided |
 | 10  | [A Postgres-backed job queue](#10-a-postgres-backed-job-queue)                                           | Decided |
+| 12  | [Old iframe links keep working through `legacy_axis`](#12-old-iframe-links-keep-working-through-legacy_axis) | Decided |
 
 ---
 
@@ -156,3 +157,17 @@ Decided on 2026-10-30.
 
 - No extra service for the queue. Jobs survive restarts, and job history lives in the same database as the datasets.
 - Redis stays a pure cache that can safely evict entries.
+
+## 12. Old iframe links keep working through `legacy_axis`
+
+Decided on 2026-11-02.
+
+**Question:** Other sites embed Datalakes plots in iframes, e.g. the [BAFU lake water temperature page](https://www.bafu.admin.ch/en/lake-water-temperature). They pick the plotted variables by their old axis: `datadetail/1046?iframe&bafu&axis:[x,y,z]&EN`. The new data model drops `axis`. Should these links keep working after the migration?
+
+**Answer:** Yes. Keep the old axis of each migrated variable in a `legacy_axis` column.
+
+**What this means:**
+
+- `variables` gets a nullable `legacy_axis` (e.g. `x`, `y`, `z1`), unique within a dataset. Only the migration fills it: it can't be set through the API, and new datasets don't have one.
+- `legacy_axis` is returned on variables, so the new website can translate the `axis:[...]` part of an old link into variable names.
+- The migration also stores the default plotted variables (the old `x`, `y` and `z`) in `plot_config`, so links without `axis:[...]` show the same plot.
