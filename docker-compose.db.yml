@@ -9,6 +9,3 @@ services:
       POSTGRES_DB: ${DB_DATABASE}
     ports:
       - "5432:5432"
-    volumes:
-      - ./db/datalakes_schema.sql:/docker-entrypoint-initdb.d/datalakes_schema.sql
-      - ./db/default_data.sql:/docker-entrypoint-initdb.d/default_data.sql

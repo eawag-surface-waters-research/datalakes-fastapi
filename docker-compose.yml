@@ -6,8 +6,22 @@ services:
       - "8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DB_USER: "${DB_USER}"
+      DB_PASSWORD: "${DB_PASSWORD}"
+      DB_HOST: "${DB_HOST}"
+      DB_PORT: "${DB_PORT}"
+      DB_DATABASE: "${DB_DATABASE}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
   fastapi-app:
     build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     environment:
       FILESYSTEM: "/code/filesystem"
       API_KEY: "${API_KEY}"

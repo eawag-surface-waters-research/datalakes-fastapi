@@ -9,3 +9,5 @@ filesystem/*
 !filesystem/.gitkeep
 .venv
 .githooks
+.pyc
+__pycache__/

@@ -15,4 +15,6 @@ WORKDIR /code
 COPY --from=builder /code/.venv /code/.venv
 ENV PATH="/code/.venv/bin:$PATH"
 COPY ./app /code/app
+COPY ./alembic.ini /code/alembic.ini
+COPY ./migrations /code/migrations
 CMD ["fastapi", "run", "app/main.py", "--port", "8000", "--workers", "4"]

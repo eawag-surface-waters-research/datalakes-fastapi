@@ -85,8 +85,11 @@ Manually set filesystem path in main.py if files are NOT located in the `filesys
 
 ```console
 docker compose -f docker-compose.db.yml up -d
+uv run alembic upgrade head
 uv run uvicorn app.main:app --host 0.0.0.0 --reload
 ```
+
+The database schema is created by migrations. Run `uv run alembic upgrade head` after starting a fresh database and after pulling new migrations. With `docker-compose.yml`, the `migrate` service does this before the API starts.
 
 ### 4. Contribute
 
@@ -108,6 +111,21 @@ uv add --dev <package>
 uv remove <package>
 uv lock --upgrade
 ```
+
+## Database migrations
+
+The database schema in [app/models.py](app/models.py) is managed with Alembic. Migrations live in `migrations/versions`.
+
+After changing a model:
+
+```console
+uv run alembic revision --autogenerate -m "add xyz"   # generate a draft, then review it
+uv run alembic upgrade head                           # apply it
+uv run alembic downgrade -1                           # undo the last migration
+uv run alembic check                                  # models and database differ?
+```
+
+Always review the generated file. Autogenerate does not detect renames (it drops and adds), changes of allowed enum values (they are CHECK constraints), or data backfills. Commit the model change and the migration together. there is a test in place that fails if the migrations and the models disagree.
 
 ## Run Tests
 
