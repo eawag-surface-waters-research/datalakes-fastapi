@@ -2,25 +2,21 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
-from typing import Annotated
 
 import sentry_sdk
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
-from app import auth
 from app.database import DATABASE_URL, check_db_connection, engine, get_safe_db_url
-from app.routes import datasetparameters, datasets, maintenance, remote, repositories, selectiontables
 
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:     %(message)s")
 logger = logging.getLogger(__name__)
 
-GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
 PRODUCTION = os.getenv("PRODUCTION", "false").lower() == "true"
 
 if PRODUCTION:
@@ -74,10 +70,6 @@ app = FastAPI(
   title="Datalakes API",
   lifespan=lifespan,
   description=description,
-  swagger_ui_init_oauth={
-    "clientId": GITHUB_CLIENT_ID,
-    "appName": "GitHub OAuth API",
-  },
   version="2.0.0",
   contact={
     "name": "James Runnalls",
@@ -125,22 +117,3 @@ def welcome():
       "queries please contact James Runnalls (james.runnalls@eawag.ch)."
     )
   }
-
-
-@app.post("/api/auth/token", tags=["Authentication"], summary="Swagger UI OAuth2 Token Exchange", include_in_schema=False)
-async def github_token(code: Annotated[str, Form(..., description="The authorization code from GitHub.")]):
-  """
-  Handles the token exchange from the authorization code.
-  This endpoint is designed specifically to be called by the Swagger UI.
-  It returns a token in the format expected by Swagger UI's authorization flow.
-  """
-  token = await auth.get_access_token(code)
-  return {"access_token": token, "token_type": "bearer"}
-
-
-app.include_router(datasets.router)
-app.include_router(repositories.router)
-app.include_router(datasetparameters.router)
-app.include_router(selectiontables.router)
-app.include_router(maintenance.router)
-app.include_router(remote.router)
