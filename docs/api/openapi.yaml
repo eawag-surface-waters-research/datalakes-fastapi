@@ -15,14 +15,6 @@ info:
     - Times are ISO 8601 in UTC, e.g. `2024-03-01T00:00:00Z`. Query parameters accept a date (`2024-03-01`) or a full timestamp.
     - Datasets are identified by their integer `id` Collections can also be addressed by their URL-safe `slug`.
 
-    ### Lists
-
-    Lists are paginated with `limit` (default 100, max 1000) and `offset`, and wrapped in an envelope:
-
-    ```json
-    {"items": [], "total": 250, "limit": 100, "offset": 0}
-    ```
-
     ### Errors
 
     Errors have a human-readable `detail` and a machine-readable `code`:
@@ -32,16 +24,18 @@ info:
     ```
     ### Background work
 
-    The API process only reads. Syncing, inspecting files, building Zarr stores and preparing exports run in a worker. Endpoints that start such work answer `202 Accepted` with a job. Its progress can be followed at `GET /jobs/{job_id}`.
+    The API process only reads. Syncing, building Zarr stores and preparing exports run in a worker. Endpoints that start such work answer `202 Accepted` with a job. Its progress can be followed at `GET /jobs/{job_id}`.
 
     ### Adding data
 
     1. Create a dataset: `POST /datasets`.
-    2. Point it at its files: `PUT /datasets/{dataset_id}/source`. Sources are only read anonymously.
-    3. Browse the source: `GET /datasets/{dataset_id}/source/files`.
-    4. Get suggested variables from a sample file: `POST /datasets/{dataset_id}/inspect`, then poll the job.
-    5. Create the variables: `POST /datasets/{dataset_id}/variables`.
-    6. Sync: `POST /datasets/{dataset_id}/sync`, then poll the job. Afterwards an external system or a schedule triggers the syncs.
+    2. Point it at its files: `PUT /datasets/{dataset_id}/source` (sources are only read anonymously!)
+    3. Fetch the files: `POST /datasets/{dataset_id}/fetch`, then poll the job. The files are only copied and listed, nothing is processed.
+    4. See the files: `GET /datasets/{dataset_id}/files`.
+    5. Get suggested variables from a file in the archive: `POST /datasets/{dataset_id}/inspect`.
+    6. Create the variables: `POST /datasets/{dataset_id}/variables`.
+    7. Build the data from the archived files: `POST /datasets/{dataset_id}/rebuild`.
+    8. Keep it up to date: `POST /datasets/{dataset_id}/sync` fetches what changed in the source and processes it.
 
     ### Data versions
 
@@ -54,8 +48,8 @@ info:
     | Role | Who | Can |
     |---|---|---|
     | Public | Anyone, without signing in | Read published datasets, drafts by ID, data, availability and downloads |
-    | User | Anyone signed in with GitHub | Everything public, plus create datasets and modify the ones they created |
-    | Owner | A member of the Datalakes GitHub team | Everything, on all datasets, plus the maintenance endpoints |
+    | User | A member of the Datalakes GitHub team | Everything public, plus create datasets and modify the ones they created |
+    | Owner | A maintainer of the Datalakes GitHub team | Everything, on all datasets, plus the maintenance endpoints |
     | Sync token | External sync-triggering systems, one token per dataset | Trigger a sync of that one dataset |
 
 servers:
@@ -82,7 +76,7 @@ tags:
   - name: Sources
     description: Where a dataset's files come from, either a public S3 bucket or a SWITCHdrive public share. Sources are read anonymously, and configs containing credentials are rejected.
   - name: Sync
-    description: Copy new files from a dataset's source and process them, inspect a sample file to suggest variables, and check whether a live dataset is up to date. Syncing and inspecting run as jobs.
+    description: Fetch a dataset's files from its source, inspect a file in the archive to suggest variables, build the data from the archived files, and keep it up to date with syncs. Check whether a live dataset is up to date. Fetching, rebuilding and syncing run as jobs; inspecting answers at once.
   - name: Jobs
     description: Background work run by the worker, with its status, progress, errors, log and result.
   - name: Files
@@ -96,7 +90,7 @@ tags:
     description: Large downloads, prepared in the background. Identical requests share one export.
   # Maintenance
   - name: Maintenance
-    description: Clear a dataset's cache, rebuild datasets, and manage the sync tokens that external callers use. Owners only.
+    description: Increase a dataset's version to clear its cache, rebuild datasets, and manage the sync tokens that external callers use. Owners only.
 
 paths:
   # ---------------------------------------------------------------------------
@@ -169,58 +163,53 @@ paths:
             enum: [title, recent, downloads]
             default: title
           example: recent
-        - $ref: "#/components/parameters/limit"
-        - $ref: "#/components/parameters/offset"
       responses:
         "200":
-          description: A page of datasets.
+          description: The datasets.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/DatasetPage"
+                $ref: "#/components/schemas/DatasetList"
               examples:
                 lexplore:
                   summary: Temperature datasets in the LéXPLORE collection
                   value:
-                    items:
-                      - id: 123
-                        title: LéXPLORE thermistor chain
-                        description: Water temperature from 0.5 m to 110 m below the LéXPLORE platform on Lake Geneva, every 10 minutes.
-                        status: published
-                        kind: data
-                        external_url: null
-                        feature_type: timeSeriesProfile
-                        site_id: 1
-                        person_id: 1
-                        organisation_id: 1
-                        license_id: 1
-                        repository_url: null
-                        origin: measurement
-                        citation: LéXPLORE thermistor chain, Eawag.
-                        datasource_link: null
-                        plot_config:
-                          colors: Rainbow
-                          time_axis: x
-                          map_marker: marker
-                        update_interval: 3600
-                        sync_interval: null
-                        latitude: 46.5004
-                        longitude: 6.6588
-                        time_start: "2019-03-07T00:00:00Z"
-                        time_end: "2024-10-29T23:50:00Z"
-                        depth_min: 0.5
-                        depth_max: 110.0
-                        downloads: 1520
-                        version: 14
-                        created_at: "2019-03-20T09:12:00Z"
-                        updated_at: "2024-10-30T00:05:00Z"
-                        parameters:
-                          - id: 5
-                            name: Water temperature
-                            unit: degC
-                    total: 1
-                    limit: 100
-                    offset: 0
+                    - id: 123
+                      title: LéXPLORE thermistor chain
+                      description: Water temperature from 0.5 m to 110 m below the LéXPLORE platform on Lake Geneva, every 10 minutes.
+                      status: published
+                      kind: data
+                      external_url: null
+                      feature_type: timeSeriesProfile
+                      site_id: 1
+                      person_id: 1
+                      organisation_id: 1
+                      license_id: 1
+                      repository_url: null
+                      origin: measurement
+                      citation: LéXPLORE thermistor chain, Eawag.
+                      datasource_link: null
+                      plot_config:
+                        colors: Rainbow
+                        time_axis: x
+                        map_marker: marker
+                      update_interval: 3600
+                      sync_interval: null
+                      latitude: 46.5004
+                      longitude: 6.6588
+                      time_start: "2019-03-07T00:00:00Z"
+                      time_end: "2024-10-29T23:50:00Z"
+                      depth_min: 0.5
+                      depth_max: 110.0
+                      downloads: 1520
+                      version: 14
+                      created_at: "2019-03-20T09:12:00Z"
+                      updated_at: "2024-10-30T00:05:00Z"
+                      created_by: 4182730
+                      parameters:
+                        - id: 5
+                          name: Water temperature
+                          unit: degC
         "400":
           $ref: "#/components/responses/BadRequest"
         "422":
@@ -408,77 +397,71 @@ paths:
 
         **Access:** public.
       parameters:
-        - $ref: "#/components/parameters/limit"
-        - $ref: "#/components/parameters/offset"
       responses:
         "200":
-          description: A page of variables.
+          description: The variables.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/VariablePage"
+                $ref: "#/components/schemas/VariableList"
               examples:
                 thermistor_chain:
                   summary: The variables of a thermistor chain
                   value:
-                    items:
-                      - id: 901
-                        dataset_id: 123
-                        name: time
-                        source_name: time
-                        role: time
-                        dimensions: [time]
-                        unit: null
-                        parameter_id: 1
-                        sensor_id: null
-                        flag_for: null
-                        legacy_axis: x
-                        description: null
-                        decoding:
-                          time_units: seconds since 1970-01-01 00:00:00
-                      - id: 902
-                        dataset_id: 123
-                        name: depth
-                        source_name: depth
-                        role: coordinate
-                        dimensions: [depth]
-                        unit: m
-                        parameter_id: 2
-                        sensor_id: null
-                        flag_for: null
-                        legacy_axis: y
-                        description: Depth of each logger below the surface
-                        decoding: null
-                      - id: 903
-                        dataset_id: 123
-                        name: temperature
-                        source_name: temp
-                        role: data
-                        dimensions: [time, depth]
-                        unit: degC
-                        parameter_id: 5
-                        sensor_id: 7
-                        flag_for: null
-                        legacy_axis: z
-                        description: Water temperature from the calibrated loggers
-                        decoding:
-                          missing_values: [-9999]
-                      - id: 904
-                        dataset_id: 123
-                        name: temperature_qual
-                        source_name: temp_qual
-                        role: flag
-                        dimensions: [time, depth]
-                        unit: null
-                        parameter_id: 27
-                        sensor_id: null
-                        flag_for: temperature
-                        legacy_axis: z1
-                        description: 1 where the temperature failed the quality checks
-                        decoding: null
-                    total: 4
-                    limit: 100
-                    offset: 0
+                    - id: 901
+                      dataset_id: 123
+                      name: time
+                      source_name: time
+                      role: time
+                      dimensions: [time]
+                      unit: null
+                      parameter_id: 1
+                      sensor_id: null
+                      flag_for: null
+                      legacy_axis: x
+                      description: null
+                      decoding:
+                        time_units: seconds since 1970-01-01 00:00:00
+                    - id: 902
+                      dataset_id: 123
+                      name: depth
+                      source_name: depth
+                      role: coordinate
+                      dimensions: [depth]
+                      unit: m
+                      parameter_id: 2
+                      sensor_id: null
+                      flag_for: null
+                      legacy_axis: y
+                      description: Depth of each logger below the surface
+                      decoding: null
+                    - id: 903
+                      dataset_id: 123
+                      name: temperature
+                      source_name: temp
+                      role: data
+                      dimensions: [time, depth]
+                      unit: degC
+                      parameter_id: 5
+                      sensor_id: 7
+                      flag_for: null
+                      legacy_axis: z
+                      description: Water temperature from the calibrated loggers
+                      decoding:
+                        missing_values: [-9999]
+                    - id: 904
+                      dataset_id: 123
+                      name: temperature_qual
+                      source_name: temp_qual
+                      role: flag
+                      dimensions: [time, depth]
+                      unit: null
+                      parameter_id: 27
+                      sensor_id: null
+                      flag_for: temperature
+                      legacy_axis: z1
+                      description: 1 where the temperature failed the quality checks
+                      decoding: null
         "404":
           $ref: "#/components/responses/NotFound"
     post:
@@ -493,7 +476,7 @@ paths:
         - `role`: `time` or `coordinate` for the axes the data runs along, `data` for measured values, `flag` for quality flags.
         - `dimensions`: the names of the coordinate variables it runs along. A coordinate's only dimension is itself, e.g. `depth` has `["depth"]`. A data variable's dimensions must name existing `time` or `coordinate` variables of the same dataset.
 
-        The inspect job suggests variables from a sample file.
+        Inspect (`POST /datasets/{dataset_id}/inspect`) suggests variables from a file in the archive.
 
         `legacy_axis` can't be sent: only the migration from the old system sets it (422).
 
@@ -678,30 +661,24 @@ paths:
             type: string
           example: geneva
         - $ref: "#/components/parameters/bbox"
-        - $ref: "#/components/parameters/limit"
-        - $ref: "#/components/parameters/offset"
       responses:
         "200":
-          description: A page of sites.
+          description: The sites.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SitePage"
+                $ref: "#/components/schemas/SiteList"
               example:
-                items:
-                  - id: 1
-                    name: Lake Geneva
-                    type: lake
-                    geometry:
-                      type: Point
-                      coordinates: [6.5, 46.45]
-                    properties:
-                      elevation_m: 372
-                      max_depth_m: 309
-                      morphology: true
-                total: 1
-                limit: 100
-                offset: 0
+                - id: 1
+                  name: Lake Geneva
+                  type: lake
+                  geometry:
+                    type: Point
+                    coordinates: [6.5, 46.45]
+                  properties:
+                    elevation_m: 372
+                    max_depth_m: 309
+                    morphology: true
         "422":
           $ref: "#/components/responses/ValidationError"
     post:
@@ -840,42 +817,38 @@ paths:
 
         **Access:** public.
       parameters:
-        - $ref: "#/components/parameters/limit"
-        - $ref: "#/components/parameters/offset"
       responses:
         "200":
-          description: A page of collections.
+          description: The collections.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CollectionPage"
+                $ref: "#/components/schemas/CollectionList"
               example:
-                items:
-                  - id: 1
-                    slug: datalakes
-                    name: Datalakes
-                    description: Datasets collected and published by the Datalakes project.
-                    link: https://www.eawag.ch/en/department/siam/projects/datalakes/
-                    site_id: null
-                    geometry: null
-                    properties: {}
-                    dataset_count: 54
-                  - id: 2
-                    slug: lexplore
-                    name: LéXPLORE
-                    description: Floating platform for research on Lake Geneva.
-                    link: https://wp.unil.ch/lexplore/
-                    site_id: 1
-                    geometry:
-                      type: Point
-                      coordinates: [6.6588, 46.5004]
-                    properties:
-                      water_depth_m: 110
-                      in_operation_since: 2019
-                    dataset_count: 2
-                total: 2
-                limit: 100
-                offset: 0
+                - id: 1
+                  slug: datalakes
+                  name: Datalakes
+                  description: Datasets collected and published by the Datalakes project.
+                  link: https://www.eawag.ch/en/department/siam/projects/datalakes/
+                  image_url: null
+                  site_id: null
+                  geometry: null
+                  properties: {}
+                  dataset_count: 54
+                - id: 2
+                  slug: lexplore
+                  name: LéXPLORE
+                  description: Floating platform for research on Lake Geneva.
+                  link: https://wp.unil.ch/lexplore/
+                  image_url: https://datalakes-eawag.s3.eu-central-1.amazonaws.com/collections/lexplore.jpg
+                  site_id: 1
+                  geometry:
+                    type: Point
+                    coordinates: [6.6588, 46.5004]
+                  properties:
+                    water_depth_m: 110
+                    in_operation_since: 2019
+                  dataset_count: 2
         "422":
           $ref: "#/components/responses/ValidationError"
     post:
@@ -897,6 +870,7 @@ paths:
               name: LéXPLORE
               description: Floating platform for research on Lake Geneva.
               link: https://wp.unil.ch/lexplore/
+              image_url: https://datalakes-eawag.s3.eu-central-1.amazonaws.com/collections/lexplore.jpg
               site_id: 1
               geometry:
                 type: Point
@@ -917,6 +891,7 @@ paths:
                 name: LéXPLORE
                 description: Floating platform for research on Lake Geneva.
                 link: https://wp.unil.ch/lexplore/
+                image_url: https://datalakes-eawag.s3.eu-central-1.amazonaws.com/collections/lexplore.jpg
                 site_id: 1
                 geometry:
                   type: Point
@@ -1089,62 +1064,56 @@ paths:
           schema:
             $ref: "#/components/schemas/IssueState"
           example: open
-        - $ref: "#/components/parameters/limit"
-        - $ref: "#/components/parameters/offset"
       responses:
         "200":
-          description: A page of issues.
+          description: The issues.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/IssuePage"
+                $ref: "#/components/schemas/IssueList"
               example:
-                items:
-                  - id: 78
-                    dataset_id: 123
-                    category: event
-                    variable_id: null
-                    start: "2024-08-17T18:00:00Z"
-                    end: "2024-08-17T22:00:00Z"
-                    depth_min: null
-                    depth_max: null
-                    type: storm
-                    description: Thunderstorm with gusts above 25 m/s that mixed the top 15 m.
-                    reporter: John Doe
-                    state: null
-                    created_at: "2024-08-19T08:30:00Z"
-                    updated_at: "2024-08-19T08:30:00Z"
-                  - id: 77
-                    dataset_id: 123
-                    category: problem
-                    variable_id: 903
-                    start: "2024-06-12T08:00:00Z"
-                    end: "2024-06-20T14:30:00Z"
-                    depth_min: 2.0
-                    depth_max: 3.0
-                    type: sensor_fault
-                    description: Logger at 2.5 m flooded, with values stuck at 4.2 °C until it was replaced.
-                    reporter: John Doe
-                    state: resolved
-                    created_at: "2024-06-14T10:02:00Z"
-                    updated_at: "2024-06-20T15:10:00Z"
-                  - id: 76
-                    dataset_id: 123
-                    category: problem
-                    variable_id: null
-                    start: "2024-04-02T07:00:00Z"
-                    end: "2024-04-02T11:30:00Z"
-                    depth_min: null
-                    depth_max: null
-                    type: maintenance
-                    description: Chain lifted for cleaning, affecting all depths.
-                    reporter: John Doe
-                    state: resolved
-                    created_at: "2024-04-02T12:05:00Z"
-                    updated_at: "2024-04-02T12:05:00Z"
-                total: 3
-                limit: 100
-                offset: 0
+                - id: 78
+                  dataset_id: 123
+                  category: event
+                  variable_id: null
+                  start: "2024-08-17T18:00:00Z"
+                  end: "2024-08-17T22:00:00Z"
+                  depth_min: null
+                  depth_max: null
+                  type: storm
+                  description: Thunderstorm with gusts above 25 m/s that mixed the top 15 m.
+                  reporter: John Doe
+                  state: null
+                  created_at: "2024-08-19T08:30:00Z"
+                  updated_at: "2024-08-19T08:30:00Z"
+                - id: 77
+                  dataset_id: 123
+                  category: problem
+                  variable_id: 903
+                  start: "2024-06-12T08:00:00Z"
+                  end: "2024-06-20T14:30:00Z"
+                  depth_min: 2.0
+                  depth_max: 3.0
+                  type: sensor_fault
+                  description: Logger at 2.5 m flooded, with values stuck at 4.2 °C until it was replaced.
+                  reporter: John Doe
+                  state: resolved
+                  created_at: "2024-06-14T10:02:00Z"
+                  updated_at: "2024-06-20T15:10:00Z"
+                - id: 76
+                  dataset_id: 123
+                  category: problem
+                  variable_id: null
+                  start: "2024-04-02T07:00:00Z"
+                  end: "2024-04-02T11:30:00Z"
+                  depth_min: null
+                  depth_max: null
+                  type: maintenance
+                  description: Chain lifted for cleaning, affecting all depths.
+                  reporter: John Doe
+                  state: resolved
+                  created_at: "2024-04-02T12:05:00Z"
+                  updated_at: "2024-04-02T12:05:00Z"
         "400":
           $ref: "#/components/responses/BadRequest"
         "404":
@@ -1308,60 +1277,54 @@ paths:
 
         **Access:** public.
       parameters:
-        - $ref: "#/components/parameters/limit"
-        - $ref: "#/components/parameters/offset"
       responses:
         "200":
-          description: A page of vocabularies.
+          description: The vocabularies.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/VocabularyPage"
+                $ref: "#/components/schemas/VocabularyList"
               example:
-                items:
-                  - name: parameters
-                    description: Physical or chemical quantities that variables measure, e.g. water temperature.
-                    fixed: false
-                    entry_count: 118
-                    url: /vocabularies/parameters
-                  - name: organisations
-                    description: Organisations that datasets belong to.
-                    fixed: false
-                    entry_count: 2
-                    url: /vocabularies/organisations
-                  - name: persons
-                    description: Contact persons of datasets. Emails are left out.
-                    fixed: false
-                    entry_count: 1
-                    url: /vocabularies/persons
-                  - name: sensors
-                    description: Sensors that variables are measured with.
-                    fixed: false
-                    entry_count: 16
-                    url: /vocabularies/sensors
-                  - name: licenses
-                    description: Licenses that datasets are published under.
-                    fixed: false
-                    entry_count: 1
-                    url: /vocabularies/licenses
-                  - name: site_types
-                    description: Kinds of sites, e.g. lake or river.
-                    fixed: false
-                    entry_count: 3
-                    url: /vocabularies/site_types
-                  - name: feature_types
-                    description: Shapes of a dataset's data.
-                    fixed: true
-                    entry_count: 3
-                    url: /vocabularies/feature_types
-                  - name: variable_roles
-                    description: Roles of a dataset's variables.
-                    fixed: true
-                    entry_count: 4
-                    url: /vocabularies/variable_roles
-                total: 8
-                limit: 100
-                offset: 0
+                - name: parameters
+                  description: Physical or chemical quantities that variables measure, e.g. water temperature.
+                  fixed: false
+                  entry_count: 118
+                  url: /vocabularies/parameters
+                - name: organisations
+                  description: Organisations that datasets belong to.
+                  fixed: false
+                  entry_count: 2
+                  url: /vocabularies/organisations
+                - name: persons
+                  description: Contact persons of datasets. Emails are left out.
+                  fixed: false
+                  entry_count: 1
+                  url: /vocabularies/persons
+                - name: sensors
+                  description: Sensors that variables are measured with.
+                  fixed: false
+                  entry_count: 16
+                  url: /vocabularies/sensors
+                - name: licenses
+                  description: Licenses that datasets are published under.
+                  fixed: false
+                  entry_count: 1
+                  url: /vocabularies/licenses
+                - name: site_types
+                  description: Kinds of sites, e.g. lake or river.
+                  fixed: false
+                  entry_count: 3
+                  url: /vocabularies/site_types
+                - name: feature_types
+                  description: Shapes of a dataset's data.
+                  fixed: true
+                  entry_count: 3
+                  url: /vocabularies/feature_types
+                - name: variable_roles
+                  description: Roles of a dataset's variables.
+                  fixed: true
+                  entry_count: 4
+                  url: /vocabularies/variable_roles
         "422":
           $ref: "#/components/responses/ValidationError"
 
@@ -1383,29 +1346,23 @@ paths:
           schema:
             type: string
           example: temperature
-        - $ref: "#/components/parameters/limit"
-        - $ref: "#/components/parameters/offset"
       responses:
         "200":
-          description: A page of entries. Their shape depends on the vocabulary.
+          description: The entries. Their shape depends on the vocabulary.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/VocabularyEntryPage"
+                $ref: "#/components/schemas/VocabularyEntryList"
               example:
-                items:
-                  - id: 5
-                    name: Water temperature
-                    cf_name: water_temperature
-                    description: In situ temperature of the water. Use a vertical coordinate variable to give the depth at which it applies.
-                    unit: degC
-                    characteristic: Physical
-                    name_de: Wassertemperatur
-                    name_fr: Température de l'eau
-                    name_it: Temperatura dell'acqua
-                total: 1
-                limit: 100
-                offset: 0
+                - id: 5
+                  name: Water temperature
+                  cf_name: water_temperature
+                  description: In situ temperature of the water. Use a vertical coordinate variable to give the depth at which it applies.
+                  unit: degC
+                  characteristic: Physical
+                  name_de: Wassertemperatur
+                  name_fr: Température de l'eau
+                  name_it: Temperatura dell'acqua
         "404":
           $ref: "#/components/responses/NotFound"
     post:
@@ -1486,50 +1443,44 @@ paths:
 
         **Access:** public.
       parameters:
-        - $ref: "#/components/parameters/limit"
-        - $ref: "#/components/parameters/offset"
       responses:
         "200":
           description: The supported source types.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SourceTypePage"
+                $ref: "#/components/schemas/SourceTypeList"
               example:
-                items:
-                  - backend: s3
-                    name: S3 bucket
-                    description: A public bucket on Amazon S3 or an S3-compatible store. The bucket must allow anonymous reads.
-                    path_description: Prefix inside the bucket, e.g. `thermistorchain/Level2`. Empty for the whole bucket.
-                    options:
-                      - name: bucket
-                        type: string
-                        required: true
-                        description: Name of the bucket.
-                        example: eawag-lexplore
-                      - name: region
-                        type: string
-                        required: false
-                        description: Region of the bucket, for Amazon S3.
-                        example: eu-central-1
-                      - name: endpoint
-                        type: string
-                        required: false
-                        description: URL of an S3-compatible store. Leave it out for Amazon S3. Must be a public HTTPS address.
-                        example: https://s3.example.org
-                  - backend: switchdrive
-                    name: SWITCHdrive public share
-                    description: A folder shared by public link on SWITCHdrive. The share must not have a password, and should only contain the dataset's files, since anyone with the link can read all of it.
-                    path_description: Folder inside the share, e.g. `Level2`. Empty for the whole share.
-                    options:
-                      - name: share_url
-                        type: string
-                        required: true
-                        description: The public link of the share. Only the share token in it is stored.
-                        example: https://drive.switch.ch/index.php/s/aB3dE5fG7hJ9kL1
-                total: 2
-                limit: 100
-                offset: 0
+                - backend: s3
+                  name: S3 bucket
+                  description: A public bucket on Amazon S3 or an S3-compatible store. The bucket must allow anonymous reads.
+                  path_description: Prefix inside the bucket, e.g. `thermistorchain/Level2`. Empty for the whole bucket.
+                  options:
+                    - name: bucket
+                      type: string
+                      required: true
+                      description: Name of the bucket.
+                      example: eawag-lexplore
+                    - name: region
+                      type: string
+                      required: false
+                      description: Region of the bucket, for Amazon S3.
+                      example: eu-central-1
+                    - name: endpoint
+                      type: string
+                      required: false
+                      description: URL of an S3-compatible store. Leave it out for Amazon S3. Must be a public HTTPS address.
+                      example: https://s3.example.org
+                - backend: switchdrive
+                  name: SWITCHdrive public share
+                  description: A folder shared by public link on SWITCHdrive. The share must not have a password, and should only contain the dataset's files, since anyone with the link can read all of it.
+                  path_description: Folder inside the share, e.g. `Level2`. Empty for the whole share.
+                  options:
+                    - name: share_url
+                      type: string
+                      required: true
+                      description: The public link of the share. Only the share token in it is stored.
+                      example: https://drive.switch.ch/index.php/s/aB3dE5fG7hJ9kL1
         "422":
           $ref: "#/components/responses/ValidationError"
 
@@ -1665,11 +1616,11 @@ paths:
       operationId: setSource
       summary: Set or replace a dataset's source
       description: |
-        Sets the dataset's source, replacing the current one. A dataset has one source. Nothing is downloaded yet: start a sync for that.
+        Sets the dataset's source, replacing the current one. A dataset has one source. Nothing is downloaded yet: start a fetch for that.
 
         The source is tested first, like `POST /sources/test`. It's only saved if it can be read anonymously.
 
-        Replacing a source keeps the files already synced: they're the dataset's archive. The next sync adds the files of the new source. Increases the dataset's `version`.
+        Replacing a source keeps the files already synced: they're the dataset's archive. The next fetch or sync adds the files of the new source. Increases the dataset's `version`.
 
         - **Drafts:** a source can be set as usual.
         - **Link datasets** can't have a source (422).
@@ -1746,99 +1697,6 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
 
-  /datasets/{dataset_id}/source/files:
-    parameters:
-      - $ref: "#/components/parameters/dataset_id"
-    get:
-      tags: [Sources]
-      operationId: listSourceFiles
-      summary: Browse a dataset's source
-      description: |
-        Lists the files and folders in the dataset's source, live, for a file browser. `included` tells whether the source's `include` patterns select each file.
-
-        This shows what's in the source now. The files already synced are in the file index (`GET /datasets/{dataset_id}/files`).
-
-        Entries are sorted by path and paginated like other lists. The source is listed in the API with a 10 s timeout and at most 10 000 entries. When the folder has more, `truncated` is `true` and the rest can't be reached, so a subfolder has to be browsed instead.
-
-        **Access:** public.
-      parameters:
-        - name: path
-          in: query
-          description: Folder to list, relative to the source's `path`. Empty for the top.
-          schema:
-            type: string
-            default: ""
-          example: "2024"
-        - name: recursive
-          in: query
-          description: Also list the contents of subfolders.
-          schema:
-            type: boolean
-            default: false
-          example: false
-        - $ref: "#/components/parameters/limit"
-        - $ref: "#/components/parameters/offset"
-      responses:
-        "200":
-          description: A page of the folder's contents.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SourceEntryPage"
-              example:
-                path: ""
-                items:
-                  - path: "2023"
-                    is_dir: true
-                    size: null
-                    modified_at: null
-                    included: true
-                  - path: "2024"
-                    is_dir: true
-                    size: null
-                    modified_at: null
-                    included: true
-                  - path: README.md
-                    is_dir: false
-                    size: 2104
-                    modified_at: "2023-01-10T08:00:00Z"
-                    included: false
-                total: 3
-                limit: 100
-                offset: 0
-                truncated: false
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "422":
-          description: The dataset has no source, or the folder is outside it.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-              examples:
-                no_source:
-                  summary: The dataset has no source
-                  value:
-                    detail: Dataset 512 has no source
-                    code: no_source
-                outside:
-                  summary: The path leaves the source
-                  value:
-                    detail: "Path '../other-dataset' is outside the source"
-                    code: validation_error
-                    errors:
-                      - loc: [query, path]
-                        msg: Must stay inside the source
-        "502":
-          description: The source couldn't be read, e.g. the bucket was made private or the listing timed out.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-              example:
-                detail: Listing the source took longer than 10 s
-                code: source_timeout
-
   # ---------------------------------------------------------------------------
   # Sync
   # ---------------------------------------------------------------------------
@@ -1850,9 +1708,9 @@ paths:
       operationId: inspectFile
       summary: Suggest variables from a sample file
       description: |
-        Queues a job that downloads one file from the source, reads it, and suggests the dataset's variables and feature type. The job's `result` holds the suggestions.
+        Reads one file from the dataset's archive and suggests the dataset's variables and feature type, in the response. Only the file's metadata and a small sample of its values are read. Fetch the dataset first, so that the file is in the archive, and pick it from `GET /datasets/{dataset_id}/files`.
 
-        The suggestions are not saved. Review them, then create the variables with `POST /datasets/{dataset_id}/variables`. Inspect also points out what needs checking: times without CF units, missing values such as `-9999`, and a location given only in the global attributes.
+        The suggestions are not saved. Review them, then create the variables with `POST /datasets/{dataset_id}/variables`.
 
         - **Drafts:** inspect works as usual, and is meant for setting up a new dataset.
         - **Link datasets** have no source (422).
@@ -1867,12 +1725,19 @@ paths:
             example:
               file: 2024/L2_ThermistorChain_202406.nc
       responses:
-        "202":
-          $ref: "#/components/responses/JobAccepted"
+        "200":
+          description: The suggestions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InspectResult"
+              examples:
+                thermistor_chain:
+                  $ref: "#/components/examples/InspectedFile"
         "404":
           $ref: "#/components/responses/NotFound"
         "422":
-          description: The dataset has no source, or the file isn't in it.
+          description: The dataset has no source, the file isn't in its archive, or it can't be read.
           content:
             application/json:
               schema:
@@ -1883,39 +1748,45 @@ paths:
                   value:
                     detail: Dataset 512 has no source
                     code: no_source
-                outside:
-                  summary: The file is outside the source
+                not_in_archive:
+                  summary: The file isn't in the archive
                   value:
-                    detail: "Path '../other-dataset/file.nc' is outside the source"
-                    code: validation_error
-                    errors:
-                      - loc: [body, file]
-                        msg: Must stay inside the source
+                    detail: "File '2024/L2_ThermistorChain_202406.nc' is not in the archive of dataset 512. Fetch the dataset first."
+                    code: file_not_in_archive
+                unreadable_file:
+                  summary: The file can't be read
+                  value:
+                    detail: "README.md is not a NetCDF or HDF5 file. Only those formats are supported."
+                    code: unreadable_file
+        "504":
+          description: Reading the file took longer than 10 s.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                detail: Reading 2024/L2_ThermistorChain_202406.nc took longer than 10 s
+                code: inspect_timeout
 
-  /datasets/{dataset_id}/sync:
+  /datasets/{dataset_id}/fetch:
     parameters:
       - $ref: "#/components/parameters/dataset_id"
     post:
       tags: [Sync]
-      operationId: syncDataset
-      summary: Sync a dataset from its source
+      operationId: fetchDataset
+      summary: Fetch a dataset's files from its source
       description: |
-        Queues a sync and returns the job. The worker then:
+        Queues a `fetch` job and returns it. The worker then:
 
-        1. Copies new and changed files from the source into the dataset's archive.
-        2. Updates the file index (`GET /datasets/{dataset_id}/files`), marking those files `new`.
-        3. Processes the new files into the dataset's data, and increases its `version` if anything changed.
+        1. Lists the source and compares it with the file index. A file is **new** if the index doesn't have it, **changed** if its size, modified time or checksum differs, and **removed** if it's no longer in the source.
+        2. Copies new and changed files into the dataset's archive, replacing the old copy of a changed file. Removed files are deleted from the archive and from the index. New and changed files are marked `new` in the index.
 
-        A file that can't be processed is marked `failed` in the file index with its error. The other files are still processed, and the job ends as `failed` so the problem is noticed.
+        If the listing fails, or is empty for a dataset that had files, the job fails and removes nothing.
 
-        **External callers**, such as a processing pipeline, call this endpoint after uploading new data to the source. Some datasets update every 20 minutes, so a sync with nothing new is cheap. External callers use the dataset's sync token.
-
-        Only one sync per dataset runs at a time. If one is already queued or running, this returns 409 with the job's ID. A queued sync will pick up the new files anyway.
-
-        - **Drafts** sync as usual.
+        - **Drafts** are fetched as usual.
         - **Link datasets** have no source (422).
 
-        **Access:** user (own datasets) or owner, or the dataset's sync token.
+        **Access:** user (own datasets) or owner.
       responses:
         "202":
           $ref: "#/components/responses/JobAccepted"
@@ -1938,8 +1809,108 @@ paths:
                 link_dataset:
                   summary: The dataset is a link dataset
                   value:
+                    detail: Dataset 2 is a link dataset and can't be fetched
+                    code: link_dataset
+
+  /datasets/{dataset_id}/sync:
+    parameters:
+      - $ref: "#/components/parameters/dataset_id"
+    post:
+      tags: [Sync]
+      operationId: syncDataset
+      summary: Update a dataset from its source
+      description: |
+        Queues a `sync` job and returns it. It is a fetch (`POST /datasets/{dataset_id}/fetch`) followed by processing. The worker:
+
+        1. Lists the source and compares it with the file index. A file is **new** if the index doesn't have it, **changed** if its size, modified time or checksum differs, and **removed** if it's no longer in the source.
+        2. Copies new and changed files into the dataset's archive, replacing the old copy of a changed file. Removed files are deleted from the archive and from the index. New and changed files are marked `new` in the index.
+        3. Processes the files marked `new` into the dataset's data. A changed file replaces the data of its old version, and a removed file's data is taken out. The dataset's extents and availability are recomputed, so they can shrink. Its `version` goes up if anything changed.
+
+        **The dataset needs variables first** (422 `no_variables`). To set up a new dataset, use `fetch`, `inspect`, create the variables and `rebuild` instead.
+
+        A file that can't be processed is marked `failed` in the file index with its error. The other files are still processed, and the job ends as `failed` so the problem is noticed.
+
+        **External callers**, such as a processing pipeline, call this endpoint after uploading new data to the source. Some datasets update every 20 minutes, so a sync with nothing new is cheap. External callers use the dataset's sync token.
+
+        Only one job per dataset runs at a time. If a fetch, sync or rebuild is already queued or running, this returns 409 with the job's ID. A queued sync will pick up the new files anyway.
+
+        - **Drafts** sync as usual.
+        - **Link datasets** have no source (422).
+
+        **Access:** user (own datasets) or owner, or the dataset's sync token.
+      responses:
+        "202":
+          $ref: "#/components/responses/JobAccepted"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          description: The dataset has no source (e.g. it's a link dataset) or no variables.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                no_source:
+                  summary: The dataset has no source
+                  value:
+                    detail: Dataset 512 has no source
+                    code: no_source
+                no_variables:
+                  summary: The dataset has no variables yet
+                  value:
+                    detail: Dataset 512 has no variables. Fetch, inspect and create the variables, then rebuild it.
+                    code: no_variables
+                link_dataset:
+                  summary: The dataset is a link dataset
+                  value:
                     detail: Dataset 2 is a link dataset and can't be synced
                     code: link_dataset
+
+  /datasets/{dataset_id}/rebuild:
+    parameters:
+      - $ref: "#/components/parameters/dataset_id"
+    post:
+      tags: [Sync]
+      operationId: rebuildDataset
+      summary: Rebuild a dataset's data from its archived files
+      description: |
+        Queues a `rebuild` job that throws away the dataset's Zarr stores and builds it again from scratch, from all the files in the archive. Use it to build a new dataset's data once its variables exist, and when something is corrupted or went wrong in an unexpected way. A normal sync only processes new and changed files. To fetch the files again first, call `POST /datasets/{dataset_id}/fetch`.
+
+        The new stores are written next to the current ones. Requests keep being answered from the current data until the new data is complete, and then one switch replaces it and increases the dataset's `version`. If the rebuild fails, the current data stays as it was.
+
+        - **Drafts** are rebuilt as usual.
+        - **Link datasets** have no data to rebuild (422).
+        - A dataset without variables can't be rebuilt (422 `no_variables`).
+
+        To rebuild many datasets, use `POST /admin/regenerate`.
+
+        **Access:** user (own datasets) or owner.
+      responses:
+        "202":
+          $ref: "#/components/responses/JobAccepted"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          description: The dataset is a link dataset or has no variables, so there is nothing to rebuild.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                link_dataset:
+                  summary: The dataset is a link dataset
+                  value:
+                    detail: Dataset 2 is a link dataset and can't be rebuilt
+                    code: link_dataset
+                no_variables:
+                  summary: The dataset has no variables yet
+                  value:
+                    detail: Dataset 512 has no variables
+                    code: no_variables
 
   /datasets/{dataset_id}/status:
     parameters:
@@ -2004,38 +1975,32 @@ paths:
       operationId: listDatasetJobs
       summary: List a dataset's jobs
       description: |
-        Lists the jobs of one dataset, newest first: what was synced, inspected or rebuilt, and what failed.
+        Lists the jobs of one dataset, newest first: what was synced or rebuilt, and what failed.
 
         **Access:** public.
       parameters:
         - $ref: "#/components/parameters/job_status"
         - $ref: "#/components/parameters/job_type"
-        - $ref: "#/components/parameters/limit"
-        - $ref: "#/components/parameters/offset"
       responses:
         "200":
-          description: A page of jobs.
+          description: The jobs.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/JobPage"
+                $ref: "#/components/schemas/JobList"
               example:
-                items:
-                  - id: 5812
-                    dataset_id: 123
-                    type: sync
-                    status: queued
-                    progress: null
-                    error: null
-                    log: ""
-                    result: null
-                    created_at: "2024-10-30T10:20:00Z"
-                    started_at: null
-                    finished_at: null
-                    url: /jobs/5812
-                total: 1
-                limit: 100
-                offset: 0
+                - id: 5812
+                  dataset_id: 123
+                  type: sync
+                  status: queued
+                  progress: null
+                  error: null
+                  log: ""
+                  result: null
+                  created_at: "2024-10-30T10:20:00Z"
+                  started_at: null
+                  finished_at: null
+                  url: /jobs/5812
         "404":
           $ref: "#/components/responses/NotFound"
         "422":
@@ -2053,40 +2018,35 @@ paths:
       parameters:
         - $ref: "#/components/parameters/job_status"
         - $ref: "#/components/parameters/job_type"
-        - $ref: "#/components/parameters/limit"
-        - $ref: "#/components/parameters/offset"
       responses:
         "200":
-          description: A page of jobs.
+          description: The jobs.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/JobPage"
+                $ref: "#/components/schemas/JobList"
               example:
-                items:
-                  - id: 5790
-                    dataset_id: 123
-                    type: sync
-                    status: failed
-                    progress: 1
-                    error: "1 of 3 new files failed: L2_ThermistorChain_202410.nc: variable 'temp' not found"
-                    log: "Copied 3 files (52.1 MB)\nProcessing L2_ThermistorChain_202410.nc failed: variable 'temp' not found"
-                    result:
-                      files_new: 3
-                      files_changed: 0
-                      files_unchanged: 64
-                      bytes_copied: 54632118
-                      files_processed: 2
-                      files_failed:
-                        - path: 2024/L2_ThermistorChain_202410.nc
-                          error: "variable 'temp' not found"
-                    created_at: "2024-10-30T00:00:02Z"
-                    started_at: "2024-10-30T00:00:03Z"
-                    finished_at: "2024-10-30T00:05:31Z"
-                    url: /jobs/5790
-                total: 1
-                limit: 100
-                offset: 0
+                - id: 5790
+                  dataset_id: 123
+                  type: sync
+                  status: failed
+                  progress: 1
+                  error: "1 of 3 new files failed: L2_ThermistorChain_202410.nc: variable 'temp' not found"
+                  log: "Copied 3 files (52.1 MB)\nProcessing L2_ThermistorChain_202410.nc failed: variable 'temp' not found"
+                  result:
+                    files_new: 3
+                    files_changed: 0
+                    files_removed: 0
+                    files_unchanged: 64
+                    bytes_copied: 54632118
+                    files_processed: 2
+                    files_failed:
+                      - path: 2024/L2_ThermistorChain_202410.nc
+                        error: "variable 'temp' not found"
+                  created_at: "2024-10-30T00:00:02Z"
+                  started_at: "2024-10-30T00:00:03Z"
+                  finished_at: "2024-10-30T00:05:31Z"
+                  url: /jobs/5790
         "422":
           $ref: "#/components/responses/ValidationError"
 
@@ -2098,7 +2058,7 @@ paths:
       operationId: getJob
       summary: Get a job
       description: |
-        Returns a job's status, progress, error, the last lines of its log, and its result. Poll this after starting a sync or an inspect.
+        Returns a job's status, progress, error, the last lines of its log, and its result. Poll this after starting a fetch, sync or rebuild.
 
         **Access:** public.
       responses:
@@ -2113,8 +2073,6 @@ paths:
                   $ref: "#/components/examples/QueuedSyncJob"
                 failed_sync:
                   $ref: "#/components/examples/FailedSyncJob"
-                finished_inspect:
-                  $ref: "#/components/examples/FinishedInspectJob"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -2172,7 +2130,7 @@ paths:
       operationId: listFiles
       summary: List a dataset's file index
       description: |
-        Lists every file synced from the dataset's source, sorted by path, with its size, the time range it covers, and whether it was processed.
+        Lists every file synced from the dataset's source, sorted by path, with its size, the time range it covers, and whether it was processed. It is also how you pick a file to inspect.
 
         With `start` and `end`, returns the files whose time range overlaps that period. Files not processed yet have no time range, so this filter leaves them out.
 
@@ -2189,40 +2147,36 @@ paths:
           schema:
             $ref: "#/components/schemas/FileStatus"
           example: failed
-        - $ref: "#/components/parameters/limit"
-        - $ref: "#/components/parameters/offset"
       responses:
         "200":
-          description: A page of files.
+          description: The files.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/FilePage"
+                $ref: "#/components/schemas/FileList"
               example:
-                items:
-                  - id: 20411
-                    dataset_id: 123
-                    path: 2024/L2_ThermistorChain_202409.nc
-                    size: 18011342
-                    modified_at: "2024-10-01T00:12:41Z"
-                    hash: 9b2f0c4e8d1a7f3b6c5e2d0a1b9c8d7e
-                    time_start: "2024-09-01T00:00:00Z"
-                    time_end: "2024-09-30T23:50:00Z"
-                    status: ok
-                    error: null
-                  - id: 20412
-                    dataset_id: 123
-                    path: 2024/L2_ThermistorChain_202410.nc
-                    size: 17388120
-                    modified_at: "2024-10-30T00:00:01Z"
-                    hash: 1c7e9a2b4d6f8e0a3b5c7d9e1f2a4b6c
-                    time_start: null
-                    time_end: null
-                    status: failed
-                    error: "variable 'temp' not found"
-                total: 2
-                limit: 100
-                offset: 0
+                - id: 20411
+                  dataset_id: 123
+                  path: 2024/L2_ThermistorChain_202409.nc
+                  size: 18011342
+                  modified_at: "2024-10-01T00:12:41Z"
+                  hash: 9b2f0c4e8d1a7f3b6c5e2d0a1b9c8d7e
+                  time_start: "2024-09-01T00:00:00Z"
+                  time_end: "2024-09-30T23:50:00Z"
+                  depth_layout: 2
+                  status: ok
+                  error: null
+                - id: 20412
+                  dataset_id: 123
+                  path: 2024/L2_ThermistorChain_202410.nc
+                  size: 17388120
+                  modified_at: "2024-10-30T00:00:01Z"
+                  hash: 1c7e9a2b4d6f8e0a3b5c7d9e1f2a4b6c
+                  time_start: null
+                  time_end: null
+                  depth_layout: null
+                  status: failed
+                  error: "variable 'temp' not found"
         "400":
           $ref: "#/components/responses/BadRequest"
         "404":
@@ -2246,8 +2200,10 @@ paths:
         **The shape depends on the feature type:**
 
         - `timeSeries`: variables have the dimension `time`.
-        - `timeSeriesProfile`: variables have the dimensions `time` and `depth`.
+        - `timeSeriesProfile`: variables have the dimensions `time` and `depth`. If the depths changed during the period (a thermistor chain with more sensors, say), `depth` holds all the depths that occur, and a value is `null` where that depth had no sensor at that time.
         - `profile`: every cast in the time range. Casts have their own depths, so variables have the dimensions `profile` and `level`. `depth` is a coordinate on both, and shorter casts are padded with `null`. List the casts with `GET /datasets/{dataset_id}/profiles`.
+
+        **One cast:** for a profile dataset, `nearest`, `before` or `after` returns a single cast instead of a time range: the cast closest to a date, or the one just before or after a given time. These parameters can't be combined with each other or with `start` and `end` (400).
 
         **Issues and flags**: values are returned as stored, and the issues that overlap the request are listed in `issues`. Flag variables are returned when they're requested, like any variable. With `mask=true`, values covered by a problem (an issue with `category: problem`) or flagged as bad are replaced by `null`. Events never mask values.
 
@@ -2265,6 +2221,9 @@ paths:
         - $ref: "#/components/parameters/variables"
         - $ref: "#/components/parameters/data_start"
         - $ref: "#/components/parameters/data_end"
+        - $ref: "#/components/parameters/nearest"
+        - $ref: "#/components/parameters/before"
+        - $ref: "#/components/parameters/after"
         - $ref: "#/components/parameters/depth_min"
         - $ref: "#/components/parameters/depth_max"
         - $ref: "#/components/parameters/resample"
@@ -2291,6 +2250,8 @@ paths:
                   $ref: "#/components/examples/TimeSeriesProfileData"
                 profile:
                   $ref: "#/components/examples/ProfileData"
+                nearest_cast:
+                  $ref: "#/components/examples/NearestProfileData"
             text/csv:
               schema:
                 type: string
@@ -2331,6 +2292,16 @@ paths:
                   value:
                     detail: Dataset 124 has no depth coordinate, so depth_min and depth_max can't be used
                     code: no_depth
+                not_profile:
+                  summary: nearest, before or after on a dataset without casts
+                  value:
+                    detail: Dataset 123 is a timeSeriesProfile dataset and has no casts, so nearest, before and after can't be used
+                    code: not_profile_dataset
+                conflicting_selection:
+                  summary: More than one way to select casts
+                  value:
+                    detail: nearest, before and after can't be combined with each other or with start and end
+                    code: invalid_profile_selection
         "404":
           $ref: "#/components/responses/NoData"
         "413":
@@ -2431,6 +2402,8 @@ paths:
       description: |
         Lists the casts of a `profile` dataset, oldest first, with each cast's time, position and depth range. `data_url` fetches one cast from the data endpoint.
 
+        To find a single cast, send `nearest`, `before` or `after` instead of `start` and `end`. The list then has the one cast closest to a date, or the cast just before or after a given time. An empty list means there is no such cast (nothing before the first cast, nothing after the last).
+
         Other feature types have no casts (400).
 
         - **Drafts:** work like any other dataset.
@@ -2440,42 +2413,39 @@ paths:
       parameters:
         - $ref: "#/components/parameters/start"
         - $ref: "#/components/parameters/end"
-        - $ref: "#/components/parameters/limit"
-        - $ref: "#/components/parameters/offset"
+        - $ref: "#/components/parameters/nearest"
+        - $ref: "#/components/parameters/before"
+        - $ref: "#/components/parameters/after"
         - $ref: "#/components/parameters/if_none_match"
       responses:
         "200":
-          description: A page of casts.
+          description: The casts.
           headers:
             ETag:
               $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ProfilePage"
+                $ref: "#/components/schemas/ProfileList"
               example:
-                items:
-                  - time: "2024-05-14T08:32:00Z"
-                    latitude: 46.4525
-                    longitude: 6.5890
-                    depth_min: 0.5
-                    depth_max: 305.0
-                    levels: 610
-                    data_url: /datasets/512/data?start=2024-05-14T08:32:00Z&end=2024-05-14T08:32:00Z
-                  - time: "2024-06-11T09:05:00Z"
-                    latitude: 46.4526
-                    longitude: 6.5891
-                    depth_min: 0.5
-                    depth_max: 302.5
-                    levels: 605
-                    data_url: /datasets/512/data?start=2024-06-11T09:05:00Z&end=2024-06-11T09:05:00Z
-                total: 2
-                limit: 100
-                offset: 0
+                - time: "2024-05-14T08:32:00Z"
+                  latitude: 46.4525
+                  longitude: 6.5890
+                  depth_min: 0.5
+                  depth_max: 305.0
+                  levels: 610
+                  data_url: /datasets/512/data?start=2024-05-14T08:32:00Z&end=2024-05-14T08:32:00Z
+                - time: "2024-06-11T09:05:00Z"
+                  latitude: 46.4526
+                  longitude: 6.5891
+                  depth_min: 0.5
+                  depth_max: 302.5
+                  levels: 605
+                  data_url: /datasets/512/data?start=2024-06-11T09:05:00Z&end=2024-06-11T09:05:00Z
         "304":
           $ref: "#/components/responses/NotModified"
         "400":
-          description: The dataset isn't a profile dataset, or `start` is after `end`.
+          description: The dataset isn't a profile dataset, `start` is after `end`, or the selection is contradictory.
           content:
             application/json:
               schema:
@@ -2491,6 +2461,11 @@ paths:
                   value:
                     detail: "start (2024-03-31) is after end (2024-03-01)"
                     code: invalid_time_range
+                conflicting_selection:
+                  summary: More than one way to select casts
+                  value:
+                    detail: nearest, before and after can't be combined with each other or with start and end
+                    code: invalid_profile_selection
         "404":
           $ref: "#/components/responses/NoData"
         "422":
@@ -2642,41 +2617,35 @@ paths:
           schema:
             type: integer
           example: 5
-        - $ref: "#/components/parameters/limit"
-        - $ref: "#/components/parameters/offset"
       responses:
         "200":
-          description: A page of datasets with data in the period.
+          description: The datasets with data in the period.
           headers:
             X-Cache:
               $ref: "#/components/headers/X-Cache"
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/DatasetAvailabilityPage"
+                $ref: "#/components/schemas/DatasetAvailabilityList"
               example:
-                items:
-                  - dataset_id: 123
-                    title: LéXPLORE thermistor chain
-                    feature_type: timeSeriesProfile
-                    site_id: 1
-                    latitude: 46.5004
-                    longitude: 6.6588
-                    first: "2023-01-01T00:00:00Z"
-                    last: "2023-12-31T23:50:00Z"
-                    fraction: 0.98
-                  - dataset_id: 512
-                    title: Lake Geneva CTD casts at SHL2
-                    feature_type: profile
-                    site_id: 1
-                    latitude: 46.4525
-                    longitude: 6.5890
-                    first: "2023-01-17T08:40:00Z"
-                    last: "2023-12-12T09:15:00Z"
-                    fraction: 0.002
-                total: 2
-                limit: 100
-                offset: 0
+                - dataset_id: 123
+                  title: LéXPLORE thermistor chain
+                  feature_type: timeSeriesProfile
+                  site_id: 1
+                  latitude: 46.5004
+                  longitude: 6.6588
+                  first: "2023-01-01T00:00:00Z"
+                  last: "2023-12-31T23:50:00Z"
+                  fraction: 0.98
+                - dataset_id: 512
+                  title: Lake Geneva CTD casts at SHL2
+                  feature_type: profile
+                  site_id: 1
+                  latitude: 46.4525
+                  longitude: 6.5890
+                  first: "2023-01-17T08:40:00Z"
+                  last: "2023-12-12T09:15:00Z"
+                  fraction: 0.002
         "400":
           $ref: "#/components/responses/BadRequest"
         "422":
@@ -2890,7 +2859,6 @@ paths:
 
         - Leave out `dataset_ids` to rebuild all datasets, or list them.
         - With `only_failed`, only the datasets whose rebuild failed in the previous run are rebuilt.
-        - With `sync`, each dataset is synced from its source before it's rebuilt.
 
         Only one run at a time. Cancelling a run's queued jobs stops it, and starting it again with `only_failed` and the remaining datasets resumes it.
 
@@ -2910,10 +2878,9 @@ paths:
                 value:
                   only_failed: true
               some:
-                summary: A few datasets, synced first
+                summary: A few datasets
                 value:
                   dataset_ids: [123, 124]
-                  sync: true
       responses:
         "202":
           description: The run started. Poll its `url`.
@@ -2933,7 +2900,6 @@ paths:
                 status: running
                 dataset_ids: null
                 only_failed: false
-                sync: false
                 total: 412
                 done: 0
                 failed: 0
@@ -2977,7 +2943,6 @@ paths:
                 status: finished
                 dataset_ids: null
                 only_failed: false
-                sync: false
                 total: 412
                 done: 409
                 failed: 3
@@ -2991,10 +2956,34 @@ paths:
                     error: Source archive is empty
                   - dataset_id: 455
                     job_id: 6177
-                    error: "Depth axis changed in L2_CTD_2022.nc and can't be merged"
+                    error: "L2_CTD_2022.nc has no time variable"
                 created_at: "2024-11-02T20:00:00Z"
                 finished_at: "2024-11-03T01:42:10Z"
                 url: /admin/regenerate/7
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /datasets/{dataset_id}/bump-version:
+    parameters:
+      - $ref: "#/components/parameters/dataset_id"
+    post:
+      tags: [Maintenance]
+      operationId: bumpDatasetVersion
+      summary: Increase a dataset's version by hand
+      description: |
+        Increases the dataset's `version` by one. Cached responses are keyed by version, so the next request for this dataset is computed afresh and the `ETag` changes.
+
+        **Access:** owner.
+      responses:
+        "200":
+          description: The dataset's new version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DatasetVersion"
+              example:
+                dataset_id: 123
+                version: 15
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -3104,48 +3093,6 @@ components:
             end: "2023-12-31"
             format: netcdf
 
-    Page:
-      type: object
-      description: |
-        Envelope for every list. A list response combines this with its own `items`:
-
-        ```yaml
-        allOf:
-          - $ref: "#/components/schemas/Page"
-          - properties:
-              items:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Site"
-        ```
-      required: [items, total, limit, offset]
-      properties:
-        items:
-          type: array
-          description: The entries on this page.
-          items: {}
-        total:
-          type: integer
-          minimum: 0
-          description: Number of entries matching the filters, across all pages.
-          examples: [250]
-        limit:
-          type: integer
-          minimum: 1
-          maximum: 1000
-          description: Most entries on one page, as requested.
-          examples: [100]
-        offset:
-          type: integer
-          minimum: 0
-          description: Number of entries skipped before this page, as requested.
-          examples: [0]
-      examples:
-        - items: []
-          total: 250
-          limit: 100
-          offset: 0
-
     Job:
       type: object
       description: |
@@ -3180,15 +3127,14 @@ components:
           description: |
             What the job produced. Its shape depends on `type`:
 
-            - `sync`: `SyncResult`, what was copied and processed.
-            - `inspect`: `InspectResult`, the suggested variables.
+            - `fetch`: `SyncResult`, what was copied and removed, with nothing processed.
+            - `sync`: `SyncResult`, what was copied, removed and processed.
             - `rebuild`: `SyncResult`, with nothing copied.
             - `export`: `{"export_id": …}`. The export itself is at `GET /exports/{export_id}`.
 
             `null` until the job ends.
           anyOf:
             - $ref: "#/components/schemas/SyncResult"
-            - $ref: "#/components/schemas/InspectResult"
             - type: object
             - type: "null"
         created_at:
@@ -3225,31 +3171,26 @@ components:
     JobType:
       type: string
       description: |
-        - `sync`: copy new files from the source and process them.
-        - `inspect`: read a sample file and suggest variables.
+        - `fetch`: copy new and changed files from the source and drop removed ones. Nothing is processed.
+        - `sync`: a fetch, then process the new and changed files.
         - `rebuild`: rebuild a dataset's Zarr stores from its archived files.
         - `export`: prepare a large download.
-      enum: [sync, inspect, rebuild, export]
+      enum: [fetch, sync, rebuild, export]
 
     JobStatus:
       type: string
       description: "`queued` → `running` → `succeeded`, `failed` or `cancelled`."
       enum: [queued, running, succeeded, failed, cancelled]
 
-    JobPage:
-      allOf:
-        - $ref: "#/components/schemas/Page"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/Job"
+    JobList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Job"
 
     SyncResult:
       type: object
-      description: The result of a sync job.
-      required: [files_new, files_changed, files_unchanged, bytes_copied, files_processed, files_failed]
+      description: The result of a fetch, sync or rebuild job.
+      required: [files_new, files_changed, files_removed, files_unchanged, bytes_copied, files_processed, files_failed]
       properties:
         files_new:
           type: integer
@@ -3258,7 +3199,11 @@ components:
         files_changed:
           type: integer
           minimum: 0
-          description: Files copied again because they changed in the source.
+          description: Files copied again because they changed in the source. Their old data is replaced.
+        files_removed:
+          type: integer
+          minimum: 0
+          description: Files deleted from the archive because they're no longer in the source. Their data is taken out of the dataset.
         files_unchanged:
           type: integer
           minimum: 0
@@ -3269,7 +3214,7 @@ components:
         files_processed:
           type: integer
           minimum: 0
-          description: New and changed files added to the dataset's data.
+          description: New and changed files added to the dataset's data. Removed files' data taken out isn't counted here.
         files_failed:
           type: array
           description: Files that couldn't be processed. They're marked `failed` in the file index.
@@ -3485,15 +3430,10 @@ components:
           items:
             $ref: "#/components/schemas/SourceTypeOption"
 
-    SourceTypePage:
-      allOf:
-        - $ref: "#/components/schemas/Page"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/SourceType"
+    SourceTypeList:
+      type: array
+      items:
+        $ref: "#/components/schemas/SourceType"
 
     SourceEntry:
       type: object
@@ -3516,24 +3456,6 @@ components:
         included:
           type: boolean
           description: Whether the source's `include` patterns select this file. Folders are included when they may contain included files.
-
-    SourceEntryPage:
-      description: A page of the contents of a folder in a source.
-      allOf:
-        - $ref: "#/components/schemas/Page"
-        - type: object
-          required: [path, truncated]
-          properties:
-            path:
-              type: string
-              description: The folder listed, relative to the source's `path`.
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/SourceEntry"
-            truncated:
-              type: boolean
-              description: "`true` when the folder has more than 10 000 entries. Only the first 10 000 are listed, and `total` counts only those."
 
     SourceTestResult:
       type: object
@@ -3566,7 +3488,7 @@ components:
       properties:
         file:
           type: string
-          description: Path of the file to inspect, relative to the source's `path`, as listed by `GET /datasets/{dataset_id}/source/files`. NetCDF and HDF5 files are supported.
+          description: Path of a file in the dataset's archive, as listed by `GET /datasets/{dataset_id}/files`. NetCDF and HDF5 files are supported.
           examples: [2024/L2_ThermistorChain_202406.nc]
 
     InspectedVariable:
@@ -3588,7 +3510,7 @@ components:
 
     InspectResult:
       type: object
-      description: "The result of an inspect job. Nothing is saved: the suggestions are meant to be reviewed before the variables are created."
+      description: "The response of inspect. Nothing is saved: the suggestions are meant to be reviewed before the variables are created."
       required: [file, format, feature_type, variables, location, global_attributes, warnings]
       properties:
         file:
@@ -3677,15 +3599,15 @@ components:
     FileStatus:
       type: string
       description: |
-        - `new`: copied from the source, not processed yet.
+        - `new`: copied from the source (new or changed there), not processed yet.
         - `ok`: processed into the dataset's data.
         - `failed`: couldn't be processed, as explained in `error`. It's tried again when the file changes in the source.
       enum: [new, ok, failed]
 
     File:
       type: object
-      description: A file in the dataset's archive, copied from its source.
-      required: [id, dataset_id, path, size, modified_at, hash, time_start, time_end, status, error]
+      description: A file in the dataset's archive, copied from its source. The archive mirrors the source, so a file that is removed from the source is removed from the archive and this index at the next sync.
+      required: [id, dataset_id, path, size, modified_at, hash, time_start, time_end, depth_layout, status, error]
       properties:
         id:
           type: integer
@@ -3713,21 +3635,22 @@ components:
           type: [string, "null"]
           format: date-time
           description: Time of the file's last value. `null` until the file is processed.
+        depth_layout:
+          type: [integer, "null"]
+          minimum: 1
+          description: |
+            For datasets with a depth, the depth layout the file belongs to (1, 2, …). A new layout starts when a file's depth axis differs from the previous file's, e.g. when a thermistor chain gets more sensors. Reads across layouts are joined into one response, so this only shows where the axis changed. `null` until the file is processed, and for datasets without a depth.
+          examples: [2]
         status:
           $ref: "#/components/schemas/FileStatus"
         error:
           type: [string, "null"]
           description: Why processing failed, or `null`.
 
-    FilePage:
-      allOf:
-        - $ref: "#/components/schemas/Page"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/File"
+    FileList:
+      type: array
+      items:
+        $ref: "#/components/schemas/File"
 
     # -------------------------------------------------------------------------
     # Shared
@@ -3794,7 +3717,7 @@ components:
           examples: [1]
         person_id:
           type: [integer, "null"]
-          description: Contact person, from the `persons` vocabulary.
+          description: "Contact person, from the `persons` vocabulary."
           examples: [1]
         organisation_id:
           type: [integer, "null"]
@@ -3875,6 +3798,12 @@ components:
       description: Changes to a dataset. Only the fields sent are changed, and `null` clears a field.
       allOf:
         - $ref: "#/components/schemas/DatasetBase"
+        - type: object
+          properties:
+            created_by:
+              type: [integer, "null"]
+              description: The GitHub user ID of the dataset's creator. Only owners can change it, e.g. to hand a dataset to someone else. Everyone else gets 403 when they send it.
+              examples: [4182730]
 
     Dataset:
       description: A dataset, as listed.
@@ -3910,6 +3839,7 @@ components:
             - version
             - created_at
             - updated_at
+            - created_by
             - parameters
           properties:
             id:
@@ -3947,6 +3877,11 @@ components:
             updated_at:
               type: string
               format: date-time
+            created_by:
+              type: [integer, "null"]
+              description: |
+                The GitHub user ID of whoever added the dataset. It decides who may modify the dataset: users can modify only the datasets they created, and owners can modify all of them.
+              examples: [4182730]
             parameters:
               type: array
               description: The parameters measured by the dataset's data variables, for lists and filters. Empty for link datasets.
@@ -4003,15 +3938,10 @@ components:
           type: [string, "null"]
           format: date-time
 
-    DatasetPage:
-      allOf:
-        - $ref: "#/components/schemas/Page"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/Dataset"
+    DatasetList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Dataset"
 
     ParameterSummary:
       type: object
@@ -4059,7 +3989,7 @@ components:
 
     Decoding:
       type: object
-      description: How to read values that the file doesn't describe in a standard way. Suggested by the inspect job.
+      description: How to read values that the file doesn't describe in a standard way. Suggested by inspect.
       properties:
         time_units:
           type: string
@@ -4159,15 +4089,10 @@ components:
                 Set only by the migration from the old system and unique within a dataset. `null` for variables created later. It can't be set or changed through the API.
               examples: [z]
 
-    VariablePage:
-      allOf:
-        - $ref: "#/components/schemas/Page"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/Variable"
+    VariableList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Variable"
 
     # -------------------------------------------------------------------------
     # Sites
@@ -4235,15 +4160,10 @@ components:
           type: string
           examples: [lake]
 
-    SitePage:
-      allOf:
-        - $ref: "#/components/schemas/Page"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/Site"
+    SiteList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Site"
 
     # -------------------------------------------------------------------------
     # Collections
@@ -4268,6 +4188,11 @@ components:
           format: uri
           description: Website of the project or platform.
           examples: [https://wp.unil.ch/lexplore/]
+        image_url:
+          type: [string, "null"]
+          format: uri
+          description: Link to an image of the collection. The file has to be publicly readable.
+          examples: [https://datalakes-eawag.s3.eu-central-1.amazonaws.com/collections/lexplore.jpg]
         site_id:
           type: [integer, "null"]
           description: The site the collection is at, if it's at one.
@@ -4298,7 +4223,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/CollectionBase"
         - type: object
-          required: [id, slug, name, description, link, site_id, geometry, properties, dataset_count]
+          required: [id, slug, name, description, link, image_url, site_id, geometry, properties, dataset_count]
           properties:
             id:
               type: integer
@@ -4336,15 +4261,10 @@ components:
           type: string
           examples: [LéXPLORE]
 
-    CollectionPage:
-      allOf:
-        - $ref: "#/components/schemas/Page"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/Collection"
+    CollectionList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Collection"
 
     # -------------------------------------------------------------------------
     # Issues
@@ -4444,15 +4364,10 @@ components:
               type: string
               format: date-time
 
-    IssuePage:
-      allOf:
-        - $ref: "#/components/schemas/Page"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/Issue"
+    IssueList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Issue"
 
     # -------------------------------------------------------------------------
     # Vocabularies
@@ -4530,7 +4445,7 @@ components:
         email:
           type: [string, "null"]
           format: email
-          description: Only returned to signed-in users.
+          description: Only returned to members of the Datalakes GitHub team.
 
     Person:
       allOf:
@@ -4627,15 +4542,10 @@ components:
           description: Where the entries are listed.
           examples: [/vocabularies/sensors]
 
-    VocabularyPage:
-      allOf:
-        - $ref: "#/components/schemas/Page"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/Vocabulary"
+    VocabularyList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Vocabulary"
 
     VocabularyEntry:
       description: An entry of one vocabulary. Its shape depends on the vocabulary.
@@ -4657,15 +4567,10 @@ components:
         - $ref: "#/components/schemas/LicenseBase"
         - $ref: "#/components/schemas/NamedEntry"
 
-    VocabularyEntryPage:
-      allOf:
-        - $ref: "#/components/schemas/Page"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/VocabularyEntry"
+    VocabularyEntryList:
+      type: array
+      items:
+        $ref: "#/components/schemas/VocabularyEntry"
 
     # -------------------------------------------------------------------------
     # Data
@@ -4876,15 +4781,10 @@ components:
           format: uri-reference
           description: The data endpoint's URL for this cast alone.
 
-    ProfilePage:
-      allOf:
-        - $ref: "#/components/schemas/Page"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/Profile"
+    ProfileList:
+      type: array
+      items:
+        $ref: "#/components/schemas/Profile"
 
     # -------------------------------------------------------------------------
     # Availability
@@ -4986,15 +4886,10 @@ components:
           maximum: 1
           description: Share of the period covered by valid data of any (matching) variable.
 
-    DatasetAvailabilityPage:
-      allOf:
-        - $ref: "#/components/schemas/Page"
-        - type: object
-          properties:
-            items:
-              type: array
-              items:
-                $ref: "#/components/schemas/DatasetAvailability"
+    DatasetAvailabilityList:
+      type: array
+      items:
+        $ref: "#/components/schemas/DatasetAvailability"
 
     # -------------------------------------------------------------------------
     # Exports
@@ -5119,15 +5014,11 @@ components:
           type: boolean
           default: false
           description: Only rebuild the datasets whose rebuild failed in the previous run.
-        sync:
-          type: boolean
-          default: false
-          description: Sync each dataset from its source before rebuilding it.
 
     RegenerateRun:
       type: object
       description: A run that rebuilds many datasets.
-      required: [id, status, dataset_ids, only_failed, sync, total, done, failed, remaining, failures, created_at, finished_at, url]
+      required: [id, status, dataset_ids, only_failed, total, done, failed, remaining, failures, created_at, finished_at, url]
       properties:
         id:
           type: integer
@@ -5140,8 +5031,6 @@ components:
           items:
             type: integer
         only_failed:
-          type: boolean
-        sync:
           type: boolean
         total:
           type: integer
@@ -5175,6 +5064,19 @@ components:
           type: string
           format: uri-reference
 
+    DatasetVersion:
+      type: object
+      required: [dataset_id, version]
+      properties:
+        dataset_id:
+          type: integer
+          examples: [123]
+        version:
+          type: integer
+          minimum: 1
+          description: The version after the increase.
+          examples: [15]
+
     SyncToken:
       type: object
       required: [dataset_id, token, created_at]
@@ -5189,25 +5091,6 @@ components:
           format: date-time
 
   parameters:
-    limit:
-      name: limit
-      in: query
-      description: Most entries to return on one page.
-      schema:
-        type: integer
-        minimum: 1
-        maximum: 1000
-        default: 100
-      example: 100
-    offset:
-      name: offset
-      in: query
-      description: Number of entries to skip, for the next pages.
-      schema:
-        type: integer
-        minimum: 0
-        default: 0
-      example: 0
     start:
       name: start
       in: query
@@ -5313,6 +5196,36 @@ components:
       schema:
         $ref: "#/components/schemas/JobType"
       example: sync
+    nearest:
+      name: nearest
+      in: query
+      description: |
+        Only for profile datasets. Selects the one cast closest in time to this moment, before or after it. If two casts are equally close, the earlier one is taken. A date (`2024-05-15`, meaning midnight UTC) or a full ISO 8601 timestamp.
+
+        Use only one of `nearest`, `before` and `after`, and not together with `start` and `end`.
+      schema:
+        type: string
+      example: "2024-05-15T12:00:00Z"
+    before:
+      name: before
+      in: query
+      description: |
+        Only for profile datasets. Selects the closest cast strictly before this moment. To step back from a cast, send that cast's `time`.
+
+        Use only one of `nearest`, `before` and `after`, and not together with `start` and `end`.
+      schema:
+        type: string
+      example: "2024-06-11T09:05:00Z"
+    after:
+      name: after
+      in: query
+      description: |
+        Only for profile datasets. Selects the closest cast strictly after this moment. To step forward from a cast, send that cast's `time`.
+
+        Use only one of `nearest`, `before` and `after`, and not together with `start` and `end`.
+      schema:
+        type: string
+      example: "2024-05-14T08:32:00Z"
     variables:
       name: variables
       in: query
@@ -5463,6 +5376,11 @@ components:
               value:
                 detail: Dataset 2 is a link dataset. Its data is at https://www.alplakes.eawag.ch/geneva
                 code: link_dataset
+            no_cast:
+              summary: No cast before or after the given time (data endpoint)
+              value:
+                detail: Dataset 512 has no cast before 2024-05-14T08:32:00Z
+                code: no_cast
     NotFound:
       description: The resource doesn't exist.
       content:
@@ -5473,13 +5391,13 @@ components:
             detail: Dataset 999 not found
             code: not_found
     Conflict:
-      description: A sync of the dataset is already queued or running. Try again when it has ended.
+      description: A fetch, sync or rebuild of the dataset is already queued or running. Try again when it has ended.
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
           example:
-            detail: Dataset 123 is already syncing (job 5812)
+            detail: Dataset 123 already has a job running (job 5812)
             code: job_in_progress
     SourceValidationError:
       description: The source config is invalid, e.g. it contains credentials or an option its backend doesn't accept.
@@ -5534,21 +5452,6 @@ components:
           examples:
             sync:
               $ref: "#/components/examples/QueuedSyncJob"
-            inspect:
-              summary: A queued inspect
-              value:
-                id: 5813
-                dataset_id: 512
-                type: inspect
-                status: queued
-                progress: null
-                error: null
-                log: ""
-                result: null
-                created_at: "2024-10-30T10:30:00Z"
-                started_at: null
-                finished_at: null
-                url: /jobs/5813
 
   examples:
     ThermistorChainDataset:
@@ -5585,6 +5488,7 @@ components:
         version: 14
         created_at: "2019-03-20T09:12:00Z"
         updated_at: "2024-10-30T00:05:00Z"
+        created_by: 4182730
         parameters:
           - id: 5
             name: Water temperature
@@ -5688,6 +5592,7 @@ components:
         version: 1
         created_at: "2024-10-30T09:00:00Z"
         updated_at: "2024-10-30T09:00:00Z"
+        created_by: null
         parameters: []
         site:
           id: 1
@@ -5728,6 +5633,7 @@ components:
         version: 1
         created_at: "2024-10-30T09:00:00Z"
         updated_at: "2024-10-30T09:00:00Z"
+        created_by: null
         parameters: []
         site:
           id: 1
@@ -5777,6 +5683,7 @@ components:
         name: LéXPLORE
         description: Floating platform for research on Lake Geneva.
         link: https://wp.unil.ch/lexplore/
+        image_url: https://datalakes-eawag.s3.eu-central-1.amazonaws.com/collections/lexplore.jpg
         site_id: 1
         geometry:
           type: Point
@@ -5931,6 +5838,7 @@ components:
         result:
           files_new: 3
           files_changed: 0
+          files_removed: 0
           files_unchanged: 64
           bytes_copied: 54632118
           files_processed: 2
@@ -5942,81 +5850,69 @@ components:
         finished_at: "2024-10-30T00:05:31Z"
         url: /jobs/5790
 
-    FinishedInspectJob:
-      summary: A finished inspect, with suggested variables
+    InspectedFile:
+      summary: Suggested variables for a thermistor chain file
       value:
-        id: 5701
-        dataset_id: 123
-        type: inspect
-        status: succeeded
-        progress: 1
-        error: null
-        log: "Downloaded 2024/L2_ThermistorChain_202406.nc (17.1 MB)\nFound 4 variables"
-        result:
-          file: 2024/L2_ThermistorChain_202406.nc
-          format: netcdf4
-          feature_type: timeSeriesProfile
-          variables:
-            - name: time
-              source_name: time
-              role: time
-              dimensions: [time]
-              unit: null
-              parameter_id: 1
-              decoding:
-                time_units: seconds since 1970-01-01 00:00:00
-              shape: [4320]
-              attributes:
-                long_name: time
-            - name: depth
-              source_name: depth
-              role: coordinate
-              dimensions: [depth]
-              unit: m
-              parameter_id: 2
-              shape: [32]
-              attributes:
-                units: m
-                long_name: depth
-            - name: temperature
-              source_name: temp
-              role: data
-              dimensions: [time, depth]
-              unit: degC
-              parameter_id: 5
-              decoding:
-                missing_values: [-9999]
-              shape: [4320, 32]
-              attributes:
-                units: degC
-                long_name: Water temperature
-            - name: temperature_qual
-              source_name: temp_qual
-              role: flag
-              dimensions: [time, depth]
-              unit: null
-              parameter_id: 27
-              flag_for: temperature
-              shape: [4320, 32]
-              attributes:
-                long_name: Quality flag for temp
-                flag_values: "0, 1"
-          location:
-            latitude: 46.5004
-            longitude: 6.6588
-          global_attributes:
-            title: LéXPLORE thermistor chain
-            institution: Eawag
-            latitude: 46.5004
-            longitude: 6.6588
-          warnings:
-            - "time has no units attribute. Its values (1717200000 to 1719791400) look like seconds since 1970, i.e. June 2024: check time_units."
-            - "temp contains -9999, which looks like a missing value: added to missing_values."
-            - The file has no latitude or longitude variable, so the location comes from the global attributes.
-        created_at: "2024-10-30T09:40:00Z"
-        started_at: "2024-10-30T09:40:01Z"
-        finished_at: "2024-10-30T09:40:09Z"
-        url: /jobs/5701
+        file: 2024/L2_ThermistorChain_202406.nc
+        format: netcdf4
+        feature_type: timeSeriesProfile
+        variables:
+          - name: time
+            source_name: time
+            role: time
+            dimensions: [time]
+            unit: null
+            parameter_id: 1
+            decoding:
+              time_units: seconds since 1970-01-01 00:00:00
+            shape: [4320]
+            attributes:
+              long_name: time
+          - name: depth
+            source_name: depth
+            role: coordinate
+            dimensions: [depth]
+            unit: m
+            parameter_id: 2
+            shape: [32]
+            attributes:
+              units: m
+              long_name: depth
+          - name: temperature
+            source_name: temp
+            role: data
+            dimensions: [time, depth]
+            unit: degC
+            parameter_id: 5
+            decoding:
+              missing_values: [-9999]
+            shape: [4320, 32]
+            attributes:
+              units: degC
+              long_name: Water temperature
+          - name: temperature_qual
+            source_name: temp_qual
+            role: flag
+            dimensions: [time, depth]
+            unit: null
+            parameter_id: 27
+            flag_for: temperature
+            shape: [4320, 32]
+            attributes:
+              long_name: Quality flag for temp
+              flag_values: "0, 1"
+        location:
+          latitude: 46.5004
+          longitude: 6.6588
+        global_attributes:
+          title: LéXPLORE thermistor chain
+          institution: Eawag
+          latitude: 46.5004
+          longitude: 6.6588
+        warnings:
+          - "time has no units attribute. Its values (1717200000 to 1719791400) look like seconds since 1970, i.e. June 2024: check time_units."
+          - "temp contains -9999, which looks like a missing value: added to missing_values."
+          - The file has no latitude or longitude variable, so the location comes from the global attributes.
 
     TimeSeriesData:
       summary: A weather station (timeSeries)
@@ -6118,6 +6014,45 @@ components:
             unit: degC
             dimensions: [profile, level]
             values: [[12.4, 12.3, 12.1], [18.9, 18.7, null]]
+        issues: []
+
+    NearestProfileData:
+      summary: The cast closest to 2024-06-01 (nearest=2024-06-01), as a single cast
+      value:
+        dataset_id: 512
+        version: 3
+        feature_type: profile
+        query:
+          variables: [temperature]
+          start: "2024-05-14T08:32:00Z"
+          end: "2024-05-14T08:32:00Z"
+          depth_min: null
+          depth_max: null
+          resample: null
+          mask: false
+        coordinates:
+          time:
+            unit: UTC
+            dimensions: [profile]
+            values: ["2024-05-14T08:32:00Z"]
+          latitude:
+            unit: degrees_north
+            dimensions: [profile]
+            values: [46.4525]
+          longitude:
+            unit: degrees_east
+            dimensions: [profile]
+            values: [6.5890]
+          depth:
+            unit: m
+            dimensions: [profile, level]
+            values: [[0.5, 1.0, 1.5]]
+        variables:
+          temperature:
+            parameter: Water temperature
+            unit: degC
+            dimensions: [profile, level]
+            values: [[12.4, 12.3, 12.1]]
         issues: []
 
     FiveYearExportRequest:

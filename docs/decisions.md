@@ -138,7 +138,7 @@ Decided on 2026-10-29.
 
 **Question:** Can we leave out authentication for now and add it later in the project? It makes development and testing easier.
 
-**Answer:** Yes. Remove it completely for now and add it back later. Sign-in will be with GitHub. Users can create datasets and modify their own; owners can modify all datasets. Owners are GitHub users in a dedicated GitHub team.
+**Answer:** Yes. Remove it completely for now and add it back later. Sign-in will be with GitHub. Users can create datasets and modify their own; owners can modify all datasets. Users are members of a dedicated Datalakes GitHub team, and owners are maintainers of that team. Someone who signs in but isn't in the team has public access.
 
 **What this means:**
 

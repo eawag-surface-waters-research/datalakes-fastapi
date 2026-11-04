@@ -74,8 +74,8 @@ class SourceBackend(StrEnum):
 
 
 class JobType(StrEnum):
+  fetch = "fetch"
   sync = "sync"
-  inspect = "inspect"
   rebuild = "rebuild"
   export = "export"
 
@@ -280,6 +280,7 @@ class CollectionBase(SQLModel):
   name: str = Field(min_length=1)
   description: str | None = None
   link: str | None = None
+  image_url: str | None = None
   site_id: int | None = Field(default=None, foreign_key="sites.id", index=True)
   geometry: dict[str, Any] | None = Field(default=None, sa_type=JSONB)
   properties: dict[str, Any] = Field(default_factory=dict, sa_type=JSONB, sa_column_kwargs={"server_default": sa.text("'{}'::jsonb")})
@@ -401,6 +402,7 @@ class File(SQLModel, table=True):
   hash: str | None = None
   time_start: datetime | None = Field(default=None, sa_type=TIMESTAMPTZ)
   time_end: datetime | None = Field(default=None, sa_type=TIMESTAMPTZ)
+  depth_layout: int | None = Field(default=None, ge=1)
   status: FileStatus = Field(default=FileStatus.new, sa_type=enum_type(FileStatus, "file_status"), sa_column_kwargs={"server_default": "new"})
   error: str | None = Field(default=None, sa_type=sa.Text)
 

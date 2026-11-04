@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI):
   logger.info(f"Database: {get_safe_db_url(DATABASE_URL)}")
   logger.info("Testing database connection...")
   if not await check_db_connection(max_retries=3, retry_delay=2):
-    logger.warning("FATAL ERROR: Cannot connect to database!")
+    logger.fatal("FATAL ERROR: Cannot connect to database!")
     await engine.dispose()
     sys.exit(1)
   logger.info("Database connection successful!")
@@ -99,7 +99,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 @app.exception_handler(ValueError)
 async def value_error_exception_handler(request: Request, exc: ValueError):
-  print(exc)
+  logger.fatal(f"ValueError: {exc}")
   return JSONResponse(
     status_code=500,
     content={

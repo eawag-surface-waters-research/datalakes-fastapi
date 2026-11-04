@@ -2,7 +2,7 @@
 
 Revision ID: 0001
 Revises:
-Create Date: 2026-11-03 10:58:43.248283
+Create Date: 2026-11-06 11:32:56.632468
 """
 
 from collections.abc import Sequence
@@ -120,6 +120,7 @@ def upgrade() -> None:
     sa.Column("name", sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column("description", sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column("link", sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column("image_url", sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column("site_id", sa.Integer(), nullable=True),
     sa.Column("geometry", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
     sa.Column("properties", postgresql.JSONB(astext_type=sa.Text()), server_default=sa.text("'{}'::jsonb"), nullable=False),
@@ -206,6 +207,7 @@ def upgrade() -> None:
     sa.Column("hash", sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.Column("time_start", sa.DateTime(timezone=True), nullable=True),
     sa.Column("time_end", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("depth_layout", sa.Integer(), nullable=True),
     sa.Column(
       "status",
       sa.Enum("new", "ok", "failed", name="file_status", native_enum=False, create_constraint=True, length=32),
@@ -224,7 +226,7 @@ def upgrade() -> None:
     sa.Column("dataset_id", sa.Integer(), nullable=True),
     sa.Column("run_id", sa.Integer(), nullable=True),
     sa.Column(
-      "type", sa.Enum("sync", "inspect", "rebuild", "export", name="job_type", native_enum=False, create_constraint=True, length=32), nullable=False
+      "type", sa.Enum("fetch", "sync", "rebuild", "export", name="job_type", native_enum=False, create_constraint=True, length=32), nullable=False
     ),
     sa.Column(
       "status",
