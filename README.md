@@ -114,7 +114,7 @@ uv lock --upgrade
 
 ## Database migrations
 
-The database schema in [app/models.py](app/models.py) is managed with Alembic. Migrations live in `migrations/versions`.
+The database schema in [app/models/](app/models/) is managed with Alembic. Migrations live in `migrations/versions`.
 
 After changing a model:
 
