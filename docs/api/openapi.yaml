@@ -13,7 +13,7 @@ info:
 
     - JSON with `snake_case` field names.
     - Times are ISO 8601 in UTC, e.g. `2024-03-01T00:00:00Z`. Query parameters accept a date (`2024-03-01`) or a full timestamp.
-    - Datasets are identified by their integer `id` Collections can also be addressed by their URL-safe `slug`.
+    - Datasets are identified by their integer `id`. Collections can also be addressed by their URL-safe `slug`.
 
     ### Errors
 
@@ -22,6 +22,9 @@ info:
     ```json
     {"detail": "Dataset 999 not found", "code": "not_found"}
     ```
+
+    An unexpected failure on the server is a `500` with the code `internal_error` and no details.
+
     ### Background work
 
     The API process only reads. Syncing, building Zarr stores and preparing exports run in a worker. Endpoints that start such work answer `202 Accepted` with a job. Its progress can be followed at `GET /jobs/{job_id}`.
@@ -224,7 +227,7 @@ paths:
         - A **data dataset** (`kind: data`, the default) gets its variables and source afterwards, through their own endpoints.
         - A **link dataset** (`kind: link`) only describes data shown elsewhere. It needs `external_url`, and can't have variables or a source.
 
-        The ID is always assigned automatically. `kind` can't be changed later.
+        The ID is always assigned automatically: an `id` in the body is ignored, like any other field that isn't listed. `kind` can't be changed later.
 
         **Access:** user. The creator can then modify the dataset.
       requestBody:
@@ -281,17 +284,11 @@ paths:
                   value:
                     detail: A link dataset needs an external_url
                     code: validation_error
-                    errors:
-                      - loc: [body, external_url]
-                        msg: Required for link datasets
                 unknown_site:
                   summary: The site doesn't exist
                   value:
                     detail: Site 999 not found
                     code: unknown_reference
-                    errors:
-                      - loc: [body, site_id]
-                        msg: Site 999 not found
 
   /datasets/{dataset_id}:
     parameters:
@@ -478,7 +475,7 @@ paths:
 
         Inspect (`POST /datasets/{dataset_id}/inspect`) suggests variables from a file in the archive.
 
-        `legacy_axis` can't be sent: only the migration from the old system sets it (422).
+        `legacy_axis` is ignored if sent: only the migration from the old system sets it.
 
         - **Drafts:** variables can be added as usual.
         - **Link datasets** can't have variables (422).
@@ -536,7 +533,7 @@ paths:
                 detail: Dataset 123 already has a variable named temperature
                 code: already_exists
         "422":
-          description: The variable is invalid, e.g. its dimensions don't name coordinates of the dataset, it sets `legacy_axis`, or the dataset is a link dataset.
+          description: The variable is invalid, e.g. its dimensions don't name coordinates of the dataset, or the dataset is a link dataset.
           content:
             application/json:
               schema:
@@ -547,17 +544,6 @@ paths:
                   value:
                     detail: "Dimension 'depth' is not a time or coordinate variable of dataset 123"
                     code: validation_error
-                    errors:
-                      - loc: [body, dimensions, 1]
-                        msg: Unknown dimension 'depth'
-                legacy_axis:
-                  summary: The body sets the read-only legacy_axis
-                  value:
-                    detail: legacy_axis is read-only
-                    code: validation_error
-                    errors:
-                      - loc: [body, legacy_axis]
-                        msg: Extra inputs are not permitted
                 link_dataset:
                   summary: The dataset is a link dataset
                   value:
@@ -575,7 +561,7 @@ paths:
       description: |
         Only the fields sent are changed. Increases the dataset's `version`. Renaming a coordinate also renames it in the `dimensions` of the variables that use it.
 
-        `legacy_axis` can't be changed (422). It stays the same when the variable is renamed, so old links keep pointing to it.
+        `legacy_axis` can't be changed: it is ignored if sent. It stays the same when the variable is renamed, so old links keep pointing to it.
 
         **Access:** user (own datasets) or owner.
       requestBody:
@@ -686,7 +672,7 @@ paths:
       operationId: createSite
       summary: Create a site
       description: |
-        Creates a site. The ID is always assigned automatically.
+        Creates a site. The ID is always assigned automatically: an `id` in the body is ignored.
 
         **Access:** user, because a new dataset may need a new site.
       requestBody:
@@ -1197,17 +1183,11 @@ paths:
                   value:
                     detail: Variable 450 is not a variable of dataset 123
                     code: unknown_reference
-                    errors:
-                      - loc: [body, variable_id]
-                        msg: Not a variable of dataset 123
                 event_state:
                   summary: An event with a state
                   value:
                     detail: Events have no state
                     code: validation_error
-                    errors:
-                      - loc: [body, state]
-                        msg: Must be null for events
                 link_dataset:
                   summary: The dataset is a link dataset
                   value:
@@ -3032,27 +3012,12 @@ components:
       properties:
         detail:
           type: string
-          description: Human-readable message.
+          description: Human-readable message. For a validation error (422) it names each invalid field.
           examples: [Dataset 999 not found]
         code:
           type: string
           description: Machine-readable code. Clients can rely on it not changing.
           examples: [not_found]
-        errors:
-          type: array
-          description: Only on validation errors (422). One entry per invalid field.
-          items:
-            type: object
-            required: [loc, msg]
-            properties:
-              loc:
-                type: array
-                description: Where the invalid value is, e.g. `["body", "options", "access_key_id"]`.
-                items:
-                  type: [string, integer]
-              msg:
-                type: string
-                description: What is wrong with the value.
       examples:
         - detail: Dataset 999 not found
           code: not_found
@@ -4086,7 +4051,7 @@ components:
               description: |
                 The variable's axis in the old Datalakes system (`x`, `y`, `z`, `M`, optionally followed by a digit, e.g. `z1`), kept so that old links keep working.
 
-                Set only by the migration from the old system and unique within a dataset. `null` for variables created later. It can't be set or changed through the API.
+                Set only by the migration from the old system and unique within a dataset. `null` for variables created later. It can't be set or changed through the API: it is ignored if sent.
               examples: [z]
 
     VariableList:
@@ -5431,11 +5396,8 @@ components:
             wrong_type:
               summary: A field has the wrong type
               value:
-                detail: Invalid request
+                detail: "limit: Input should be less than or equal to 1000"
                 code: validation_error
-                errors:
-                  - loc: [query, limit]
-                    msg: Input should be less than or equal to 1000
     JobAccepted:
       description: The work was queued. Poll the job's `url` to follow it.
       headers:
@@ -5796,18 +5758,12 @@ components:
       value:
         detail: Sources are read anonymously. Remove access_key_id and make the bucket publicly readable instead.
         code: credentials_not_allowed
-        errors:
-          - loc: [body, options, access_key_id]
-            msg: Credentials are not allowed
 
     UnknownOptionRejected:
       summary: An option the backend doesn't accept
       value:
         detail: "Unknown option 'acl' for backend s3. Allowed: bucket, region, endpoint"
         code: unknown_option
-        errors:
-          - loc: [body, options, acl]
-            msg: Unknown option
 
     QueuedSyncJob:
       summary: A queued sync

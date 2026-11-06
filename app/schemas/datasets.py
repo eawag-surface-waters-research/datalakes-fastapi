@@ -1,6 +1,8 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Self
 
+from pydantic import model_validator
+from pydantic_core import PydanticCustomError
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
@@ -16,10 +18,11 @@ class DatasetBase(SQLModel):
   )
   external_url: str | None = None
   feature_type: FeatureType | None = Field(default=None, index=True, sa_type=enum_type(FeatureType, "feature_type"))
-  site_id: int | None = Field(default=None, foreign_key="sites.id", index=True)
-  person_id: int | None = Field(default=None, foreign_key="persons.id", index=True)
-  organisation_id: int | None = Field(default=None, foreign_key="organisations.id", index=True)
-  license_id: int | None = Field(default=None, foreign_key="licenses.id", index=True)
+  # TODO: Add foreign keys when other resources can be created
+  # site_id: int | None = Field(default=None, foreign_key="sites.id", index=True)
+  # person_id: int | None = Field(default=None, foreign_key="persons.id", index=True)
+  # organisation_id: int | None = Field(default=None, foreign_key="organisations.id", index=True)
+  # license_id: int | None = Field(default=None, foreign_key="licenses.id", index=True)
   repository_url: str | None = None
   origin: str | None = None
   citation: str | None = None
@@ -34,9 +37,22 @@ class DatasetBase(SQLModel):
 class DatasetCreate(DatasetBase):
   kind: DatasetKind = DatasetKind.data
 
+  @model_validator(mode="after")
+  def check_external_url(self) -> Self:
+    if self.kind == DatasetKind.link and not self.external_url:
+      raise PydanticCustomError("external_url_required", "A link dataset needs an external_url")
+    if self.kind == DatasetKind.data and self.external_url:
+      raise PydanticCustomError("external_url_not_allowed", "Only a link dataset can have an external_url")
+    return self
+
 
 class DatasetRead(DatasetBase):
   id: int
+  # TODO: Add foreign keys when other resources can be created
+  site_id: int | None
+  person_id: int | None
+  organisation_id: int | None
+  license_id: int | None
   kind: DatasetKind
   time_start: datetime | None
   time_end: datetime | None

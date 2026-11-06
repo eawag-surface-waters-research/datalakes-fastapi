@@ -86,7 +86,7 @@ Manually set filesystem path in main.py if files are NOT located in the `filesys
 ```console
 docker compose -f docker-compose.db.yml up -d
 uv run alembic upgrade head
-uv run uvicorn app.main:app --host 0.0.0.0 --reload
+uv run python -m app.main # starts the API on http://localhost:8000
 ```
 
 The database schema is created by migrations. Run `uv run alembic upgrade head` after starting a fresh database and after pulling new migrations. With `docker-compose.yml`, the `migrate` service does this before the API starts.

@@ -30,3 +30,6 @@ fix = true
 [tool.ruff.lint]
 # enable fixing isort
 extend-select = ["I"]
+
+[tool.pytest.ini_options]
+anyio_mode = "auto"

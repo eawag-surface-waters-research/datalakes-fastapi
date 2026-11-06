@@ -6,6 +6,12 @@ class DatasetStatus(StrEnum):
   draft = "draft"
 
 
+class DatasetSort(StrEnum):
+  title = "title"
+  recent = "recent"
+  downloads = "downloads"
+
+
 class DatasetKind(StrEnum):
   data = "data"
   link = "link"
