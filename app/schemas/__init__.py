@@ -7,7 +7,7 @@ from app.schemas.issues import IssueBase
 from app.schemas.jobs import JobBase, RegenerateRunBase
 from app.schemas.maintenance import CatalogueVersionBase, SyncTokenBase
 from app.schemas.sites import SiteBase
-from app.schemas.sources import SourceBase
+from app.schemas.sources import SourceBase, SourceType, SourceTypeOption
 from app.schemas.variables import VariableBase
 from app.schemas.vocabularies import LicenseBase, OrganisationBase, ParameterBase, PersonBase, SensorBase, SiteTypeBase
 
@@ -31,6 +31,8 @@ __all__ = [
   "SiteBase",
   "SiteTypeBase",
   "SourceBase",
+  "SourceType",
+  "SourceTypeOption",
   "SyncTokenBase",
   "VariableBase",
 ]

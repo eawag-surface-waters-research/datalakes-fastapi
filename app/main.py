@@ -12,7 +12,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from app.database import DATABASE_URL, check_db_connection, engine, get_safe_db_url
 from app.errors import add_exception_handlers
-from app.routes import datasets
+from app.routes import datasets, sources
 
 load_dotenv()
 
@@ -100,7 +100,9 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 add_exception_handlers(app)
+
 app.include_router(datasets.router)
+app.include_router(sources.router)
 
 
 @app.get("/", include_in_schema=False)
