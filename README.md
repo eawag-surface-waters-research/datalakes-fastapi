@@ -2,7 +2,11 @@
 
 [![License: MIT][mit-by-shield]][mit-by] ![Python][python-by-shield]
 
-This is a repository for Datalakes fastapi.
+> [!NOTE]
+> This repository is still under active development. Endpoints, data models and documentation may change without notice.
+
+This is the repository for the new [datalakes](https://www.datalakes-eawag.ch/) API, which is built with [FastAPI](https://fastapi.tiangolo.com/).
+This API is designed to be a replacement for the existing [NodeJS-based datalakes API](https://github.com/eawag-surface-waters-research/datalakes-nodejs).
 
 Endpoints can be found in `app/main.py`
 
@@ -10,8 +14,6 @@ The documentation pages are available at the following:
 
 - Swagger [http://localhost:8000/docs](http://localhost:8000/docs)
 - Redoc [http://localhost:8000/redoc](http://localhost:8000/redoc)
-
-![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)
 
 ## Production Deployment
 
