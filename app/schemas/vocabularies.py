@@ -39,3 +39,15 @@ class LicenseBase(SQLModel):
 class SiteTypeBase(SQLModel):
   name: str
   description: str | None = None
+
+
+class OrganisationRead(OrganisationBase):
+  id: int
+
+
+class PersonRead(PersonBase):
+  id: int
+
+
+class LicenseRead(LicenseBase):
+  id: int

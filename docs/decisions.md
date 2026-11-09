@@ -22,6 +22,7 @@ Each entry has a status:
 | 9   | [Leave out authentication for now?](#9-leave-out-authentication-for-now)                                 | Decided |
 | 10  | [A Postgres-backed job queue](#10-a-postgres-backed-job-queue)                                           | Decided |
 | 12  | [Old iframe links keep working through `legacy_axis`](#12-old-iframe-links-keep-working-through-legacy_axis) | Decided |
+| 13  | [Referenced objects are expanded by default](#13-referenced-objects-are-expanded-by-default)              | Decided |
 
 ---
 
@@ -171,3 +172,18 @@ Decided on 2026-11-02.
 - `variables` gets a nullable `legacy_axis` (e.g. `x`, `y`, `z1`), unique within a dataset. Only the migration fills it: it can't be set through the API, and new datasets don't have one.
 - `legacy_axis` is returned on variables, so the new website can translate the `axis:[...]` part of an old link into variable names.
 - The migration also stores the default plotted variables (the old `x`, `y` and `z`) in `plot_config`, so links without `axis:[...]` show the same plot.
+
+## 13. Referenced objects are expanded by default
+
+Decided on 2026-11-09.
+
+**Question:** Responses point to other resources by ID only, e.g. a dataset's `site_id: 1`. Users who don't know the sites and vocabularies by heart need a second request to understand them. Should responses include the referenced objects?
+
+**Answer:** Yes. Read and list endpoints get a query parameter `expand`, `true` by default. With `expand=false`, only the IDs are returned.
+
+**What this means:**
+
+- The ID stays, and the full object is added next to it, in a field named without `_id`: `site` next to `site_id`. It's `null` when the ID is `null`.
+- Only one level is expanded: objects inside `site`, `person`… keep their own references as IDs.
+- `POST`, `PUT` and `PATCH` responses only have the IDs.
+- Cached responses now contain sites and vocabulary entries, so changing one of them must invalidate the cached responses that embed it.

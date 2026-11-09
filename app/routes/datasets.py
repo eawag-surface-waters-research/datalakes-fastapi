@@ -6,32 +6,26 @@ from sqlmodel import col, select
 
 from app.database import SessionDep
 from app.enums import DatasetSort, DatasetStatus, FeatureType
-from app.errors import ApiError, ErrorResponse, not_found
+from app.errors import ErrorResponse, not_found
 from app.models import Collection, CollectionDataset, Dataset, License, Organisation, Person, Site, Variable
-from app.params import Bbox, End, Start, parse_bbox, parse_time_range
-from app.schemas import DatasetCreate, DatasetRead
+from app.params import Bbox, End, Expand, Start, parse_bbox, parse_time_range
+from app.references import Reference, check_references, expand_references
+from app.schemas import DatasetCreate, DatasetRead, LicenseRead, OrganisationRead, PersonRead, SiteRead
 
 router = APIRouter(prefix="/datasets", tags=["Datasets"])
 
-# Fields that point to a row of another table, with the name used in error messages
-REFERENCES: dict[str, tuple[str, type]] = {
-  "site_id": ("Site", Site),
-  "person_id": ("Person", Person),
-  "organisation_id": ("Organisation", Organisation),
-  "license_id": ("License", License),
+REFERENCES: dict[str, Reference] = {
+  "site_id": Reference("Site", Site, SiteRead),
+  "person_id": Reference("Person", Person, PersonRead),
+  "organisation_id": Reference("Organisation", Organisation, OrganisationRead),
+  "license_id": Reference("License", License, LicenseRead),
 }
-
-
-async def check_references(session: SessionDep, data: DatasetCreate) -> None:
-  for field, (name, model) in REFERENCES.items():
-    reference_id = getattr(data, field)
-    if reference_id is not None and await session.get(model, reference_id) is None:
-      raise ApiError(422, "unknown_reference", f"{name} {reference_id} not found")
 
 
 @router.get(
   "",
   response_model=list[DatasetRead],
+  response_model_exclude_unset=True,  # leaves out the referenced objects unless they're expanded
   summary="List datasets",
   responses={400: {"model": ErrorResponse, "description": "The request makes no sense, e.g. `start` is after `end`."}},
 )
@@ -51,6 +45,7 @@ async def list_datasets(
   bbox: Bbox = None,
   status: Annotated[DatasetStatus, Query(description="List published datasets (default) or drafts.")] = DatasetStatus.published,
   sort: Annotated[DatasetSort, Query(description="How to order the datasets.")] = DatasetSort.title,
+  expand: Expand = True,
 ):
   """
   Lists the published datasets, or the drafts with `status=draft`. All filters combine with AND.
@@ -64,6 +59,8 @@ async def list_datasets(
   - `title`: alphabetically.
   - `recent`: latest data first (by `time_end`). Datasets without data come last.
   - `downloads`: most downloaded first.
+
+  The site, contact person, organisation and license of each dataset are returned in full next to their IDs, unless `expand=false`.
   """
   start_time, end_time = parse_time_range(start, end)
   query = select(Dataset).where(Dataset.status == status)
@@ -94,12 +91,16 @@ async def list_datasets(
 
   query = query.order_by(func.lower(Dataset.title), col(Dataset.id))  # to make the sort stable
 
-  return (await session.exec(query)).all()
+  datasets = [DatasetRead.model_validate(dataset) for dataset in (await session.exec(query)).all()]
+  if expand:
+    await expand_references(session, datasets, REFERENCES)
+  return datasets
 
 
 @router.post(
   "",
   response_model=DatasetRead,
+  response_model_exclude_unset=True,  # leaves out the referenced objects, which are never expanded here
   status_code=201,
   summary="Create a dataset",
   responses={
@@ -114,8 +115,10 @@ async def create_dataset(data: DatasetCreate, session: SessionDep):
   - A **link dataset** (`kind: link`) only describes data shown elsewhere. It needs `external_url`, and can't have variables or a source.
 
   The ID is always assigned automatically. `kind` can't be changed later.
+
+  The response has the IDs of the site, contact person, organisation and license only. `GET /datasets/{dataset_id}` returns them in full.
   """
-  await check_references(session, data)
+  await check_references(session, data, REFERENCES)
   dataset = Dataset.model_validate(data)
   session.add(dataset)
   await session.commit()
@@ -126,17 +129,23 @@ async def create_dataset(data: DatasetCreate, session: SessionDep):
 @router.get(
   "/{dataset_id}",
   response_model=DatasetRead,
+  response_model_exclude_unset=True,  # leaves out the referenced objects unless they're expanded
   summary="Get a dataset",
   responses={404: {"model": ErrorResponse, "description": "The resource doesn't exist."}},
 )
-async def get_dataset(dataset_id: int, session: SessionDep):
+async def get_dataset(dataset_id: int, session: SessionDep, expand: Expand = True):
   """
   Returns a dataset's metadata.
 
   - **Drafts** are returned too: they're only left out of lists.
   - **Link datasets** have no variables and no source. Their data is at `external_url`.
+
+  The site, contact person, organisation and license are returned in full next to their IDs, unless `expand=false`.
   """
   dataset = await session.get(Dataset, dataset_id)
   if dataset is None:
     raise not_found("Dataset", dataset_id)
-  return dataset
+  read = DatasetRead.model_validate(dataset)
+  if expand:
+    await expand_references(session, [read], REFERENCES)
+  return read

@@ -15,6 +15,14 @@ info:
     - Times are ISO 8601 in UTC, e.g. `2024-03-01T00:00:00Z`. Query parameters accept a date (`2024-03-01`) or a full timestamp.
     - Datasets are identified by their integer `id`. Collections can also be addressed by their URL-safe `slug`.
 
+    ### References
+
+    Fields ending in `_id` point to another resource, e.g. a dataset's `site_id`. Read endpoints also return the referenced object in full, next to the ID, in a field named without `_id`: `site`. It's `null` when the ID is `null`. With `expand=false`, only the IDs are returned.
+
+    - The IDs are always there, whatever `expand` is.
+    - Only one level is expanded: the objects inside `site`, `person`… keep their own references as IDs.
+    - Responses to `POST`, `PUT` and `PATCH` only have the IDs.
+
     ### Errors
 
     Errors have a human-readable `detail` and a machine-readable `code`:
@@ -110,7 +118,7 @@ paths:
         - **Drafts** are left out unless `status=draft` is requested.
         - **Link datasets** are listed like other datasets. They have no variables, so their `parameters` list is empty, and they have no extents, so the `start`/`end` filter leaves them out.
 
-        All filters combine with AND.
+        All filters combine with AND. Each dataset has its `site`, `person`, `organisation` and `license` in full, unless `expand=false`.
 
         **Access:** public. Listing drafts (`status=draft`): owner, or user for the drafts they created.
       parameters:
@@ -166,6 +174,7 @@ paths:
             enum: [title, recent, downloads]
             default: title
           example: recent
+        - $ref: "#/components/parameters/expand"
       responses:
         "200":
           description: The datasets.
@@ -213,6 +222,32 @@ paths:
                         - id: 5
                           name: Water temperature
                           unit: degC
+                      site:
+                        id: 1
+                        name: Lake Geneva
+                        type: lake
+                        geometry:
+                          type: Point
+                          coordinates: [6.5, 46.45]
+                        properties:
+                          elevation_m: 372
+                          max_depth_m: 309
+                          morphology: true
+
+                      person:
+                        id: 1
+                        name: John Doe
+                        organisation_id: 1
+                        email: john.doe@example.com
+                      organisation:
+                        id: 1
+                        name: Eawag
+                        link: https://www.eawag.ch/
+                      license:
+                        id: 1
+                        name: CC BY 4.0
+                        description: Free to share and adapt, with credit to the authors.
+                        link: https://creativecommons.org/licenses/by/4.0/
         "400":
           $ref: "#/components/responses/BadRequest"
         "422":
@@ -228,6 +263,8 @@ paths:
         - A **link dataset** (`kind: link`) only describes data shown elsewhere. It needs `external_url`, and can't have variables or a source.
 
         The ID is always assigned automatically: an `id` in the body is ignored, like any other field that isn't listed. `kind` can't be changed later.
+
+        The response has the IDs of the site, contact person, organisation and license only. `GET /datasets/{dataset_id}` returns them in full.
 
         **Access:** user. The creator can then modify the dataset.
       requestBody:
@@ -298,12 +335,14 @@ paths:
       operationId: getDataset
       summary: Get a dataset
       description: |
-        Returns a dataset's metadata with its site, variables, collections and a summary of its source.
+        Returns a dataset's metadata with its variables, collections and a summary of its source. The site, contact person, organisation and license are in full too, unless `expand=false`.
 
         - **Drafts** are returned too: they're only left out of lists.
         - **Link datasets** have no variables and no source. Their data is at `external_url`.
 
         **Access:** public.
+      parameters:
+        - $ref: "#/components/parameters/expand"
       responses:
         "200":
           description: The dataset.
@@ -316,8 +355,10 @@ paths:
                   $ref: "#/components/examples/ThermistorChainDataset"
                 draft:
                   $ref: "#/components/examples/DraftDataset"
+                  summary: A draft dataset, with expand=false
                 link:
                   $ref: "#/components/examples/LinkDataset"
+                  summary: A link dataset, with expand=false
         "404":
           $ref: "#/components/responses/NotFound"
     patch:
@@ -329,6 +370,8 @@ paths:
 
         - Publish a draft with `{"status": "published"}`, or hide a dataset again with `{"status": "draft"}`.
         - `kind` can't be changed. A link dataset can't lose its `external_url`.
+
+        The response has the IDs of the site, contact person, organisation and license only.
 
         **Access:** user (own datasets) or owner.
       requestBody:
@@ -354,8 +397,42 @@ paths:
               schema:
                 $ref: "#/components/schemas/DatasetDetail"
               examples:
-                thermistor_chain:
-                  $ref: "#/components/examples/ThermistorChainDataset"
+                published:
+                  summary: The draft dataset, published
+                  value:
+                    id: 512
+                    title: Lake Geneva CTD casts at SHL2
+                    description: Monthly CTD casts at the deepest point of Lake Geneva (SHL2), from the surface to 309 m.
+                    status: published
+                    kind: data
+                    external_url: null
+                    feature_type: profile
+                    site_id: 1
+                    person_id: 1
+                    organisation_id: 1
+                    license_id: 1
+                    repository_url: null
+                    origin: measurement
+                    citation: null
+                    datasource_link: null
+                    plot_config: null
+                    update_interval: null
+                    sync_interval: null
+                    latitude: null
+                    longitude: null
+                    time_start: null
+                    time_end: null
+                    depth_min: null
+                    depth_max: null
+                    downloads: 0
+                    version: 2
+                    created_at: "2024-10-30T09:00:00Z"
+                    updated_at: "2024-10-31T14:20:00Z"
+                    created_by: null
+                    parameters: []
+                    variables: []
+                    collections: []
+                    source: null
         "404":
           $ref: "#/components/responses/NotFound"
         "422":
@@ -392,8 +469,11 @@ paths:
         - **Drafts:** their variables are returned like any other.
         - **Link datasets** have no variables, so the list is empty.
 
+        Each variable has its `parameter` and `sensor` in full, unless `expand=false`.
+
         **Access:** public.
       parameters:
+        - $ref: "#/components/parameters/expand"
       responses:
         "200":
           description: The variables.
@@ -419,6 +499,17 @@ paths:
                       description: null
                       decoding:
                         time_units: seconds since 1970-01-01 00:00:00
+                      parameter:
+                        id: 1
+                        name: Time
+                        cf_name: time
+                        description: Time of the measurement.
+                        unit: null
+                        characteristic: null
+                        name_de: Zeit
+                        name_fr: Temps
+                        name_it: Tempo
+                      sensor: null
                     - id: 902
                       dataset_id: 123
                       name: depth
@@ -432,6 +523,17 @@ paths:
                       legacy_axis: y
                       description: Depth of each logger below the surface
                       decoding: null
+                      parameter:
+                        id: 2
+                        name: Depth
+                        cf_name: depth
+                        description: Distance below the water surface.
+                        unit: m
+                        characteristic: Physical
+                        name_de: Tiefe
+                        name_fr: Profondeur
+                        name_it: Profondità
+                      sensor: null
                     - id: 903
                       dataset_id: 123
                       name: temperature
@@ -446,6 +548,22 @@ paths:
                       description: Water temperature from the calibrated loggers
                       decoding:
                         missing_values: [-9999]
+                      parameter:
+                        id: 5
+                        name: Water temperature
+                        cf_name: water_temperature
+                        description: In situ temperature of the water. Use a vertical coordinate variable to give the depth at which it applies.
+                        unit: degC
+                        characteristic: Physical
+                        name_de: Wassertemperatur
+                        name_fr: Température de l'eau
+                        name_it: Temperatura dell'acqua
+                      sensor:
+                        id: 7
+                        name: TidBit MX2203 calibrated
+                        manufacturer: Onset (calibrated by Eawag)
+                        accuracy: "0.05"
+                        link: null
                     - id: 904
                       dataset_id: 123
                       name: temperature_qual
@@ -459,6 +577,17 @@ paths:
                       legacy_axis: z1
                       description: 1 where the temperature failed the quality checks
                       decoding: null
+                      parameter:
+                        id: 27
+                        name: Quality flag
+                        cf_name: null
+                        description: Marks values that failed the quality checks.
+                        unit: null
+                        characteristic: null
+                        name_de: null
+                        name_fr: null
+                        name_it: null
+                      sensor: null
         "404":
           $ref: "#/components/responses/NotFound"
     post:
@@ -799,10 +928,11 @@ paths:
       operationId: listCollections
       summary: List collections
       description: |
-        Lists collections, sorted by name, with the number of published datasets in each.
+        Lists collections, sorted by name, with the number of published datasets in each. Each collection has its `site` in full, unless `expand=false`.
 
         **Access:** public.
       parameters:
+        - $ref: "#/components/parameters/expand"
       responses:
         "200":
           description: The collections.
@@ -821,6 +951,7 @@ paths:
                   geometry: null
                   properties: {}
                   dataset_count: 54
+                  site: null
                 - id: 2
                   slug: lexplore
                   name: LéXPLORE
@@ -835,6 +966,17 @@ paths:
                     water_depth_m: 110
                     in_operation_since: 2019
                   dataset_count: 2
+                  site:
+                    id: 1
+                    name: Lake Geneva
+                    type: lake
+                    geometry:
+                      type: Point
+                      coordinates: [6.5, 46.45]
+                    properties:
+                      elevation_m: 372
+                      max_depth_m: 309
+                      morphology: true
         "422":
           $ref: "#/components/responses/ValidationError"
     post:
@@ -907,9 +1049,11 @@ paths:
       operationId: getCollection
       summary: Get a collection with its datasets
       description: |
-        Returns a collection and its published datasets. Drafts in the collection are left out. Link datasets are included.
+        Returns a collection and its published datasets. Drafts in the collection are left out. Link datasets are included. The `site` is in full too, unless `expand=false`.
 
         **Access:** public.
+      parameters:
+        - $ref: "#/components/parameters/expand"
       responses:
         "200":
           description: The collection.
@@ -940,14 +1084,39 @@ paths:
               description: Floating platform for research on Lake Geneva, 570 m off Pully, run by EPFL, Eawag, UNIL, UNIGE and CARRTEL. In operation since 2019.
       responses:
         "200":
-          description: The updated collection.
+          description: The updated collection, with the ID of its site only.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CollectionDetail"
-              examples:
-                lexplore:
-                  $ref: "#/components/examples/LexploreCollection"
+              example:
+                id: 2
+                slug: lexplore
+                name: LéXPLORE
+                description: Floating platform for research on Lake Geneva, 570 m off Pully, run by EPFL, Eawag, UNIL, UNIGE and CARRTEL. In operation since 2019.
+                link: https://wp.unil.ch/lexplore/
+                image_url: https://datalakes-eawag.s3.eu-central-1.amazonaws.com/collections/lexplore.jpg
+                site_id: 1
+                geometry:
+                  type: Point
+                  coordinates: [6.6588, 46.5004]
+                properties:
+                  water_depth_m: 110
+                  in_operation_since: 2019
+                dataset_count: 2
+                datasets:
+                  - id: 123
+                    title: LéXPLORE thermistor chain
+                    kind: data
+                    feature_type: timeSeriesProfile
+                    time_start: "2019-03-07T00:00:00Z"
+                    time_end: "2024-10-29T23:50:00Z"
+                  - id: 124
+                    title: LéXPLORE meteostation
+                    kind: data
+                    feature_type: timeSeries
+                    time_start: "2019-02-28T00:00:00Z"
+                    time_end: "2024-10-30T00:00:00Z"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -1028,6 +1197,8 @@ paths:
         - **Drafts:** their issues are returned like any other.
         - **Link datasets** have no issues, so the list is empty.
 
+        Each issue has its `variable` in full, unless `expand=false`.
+
         **Access:** public.
       parameters:
         - $ref: "#/components/parameters/start"
@@ -1050,6 +1221,7 @@ paths:
           schema:
             $ref: "#/components/schemas/IssueState"
           example: open
+        - $ref: "#/components/parameters/expand"
       responses:
         "200":
           description: The issues.
@@ -1072,6 +1244,7 @@ paths:
                   state: null
                   created_at: "2024-08-19T08:30:00Z"
                   updated_at: "2024-08-19T08:30:00Z"
+                  variable: null
                 - id: 77
                   dataset_id: 123
                   category: problem
@@ -1086,6 +1259,21 @@ paths:
                   state: resolved
                   created_at: "2024-06-14T10:02:00Z"
                   updated_at: "2024-06-20T15:10:00Z"
+                  variable:
+                    id: 903
+                    dataset_id: 123
+                    name: temperature
+                    source_name: temp
+                    role: data
+                    dimensions: [time, depth]
+                    unit: degC
+                    parameter_id: 5
+                    sensor_id: 7
+                    flag_for: null
+                    legacy_axis: z
+                    description: Water temperature from the calibrated loggers
+                    decoding:
+                      missing_values: [-9999]
                 - id: 76
                   dataset_id: 123
                   category: problem
@@ -1100,6 +1288,7 @@ paths:
                   state: resolved
                   created_at: "2024-04-02T12:05:00Z"
                   updated_at: "2024-04-02T12:05:00Z"
+                  variable: null
         "400":
           $ref: "#/components/responses/BadRequest"
         "404":
@@ -1256,7 +1445,6 @@ paths:
         Lists the vocabularies, with the number of entries in each. The entries themselves are listed by `GET /vocabularies/{vocabulary_name}`.
 
         **Access:** public.
-      parameters:
       responses:
         "200":
           description: The vocabularies.
@@ -1316,7 +1504,7 @@ paths:
       operationId: listVocabularyEntries
       summary: List one vocabulary
       description: |
-        Lists the entries of one vocabulary, sorted by name.
+        Lists the entries of one vocabulary, sorted by name. Persons have their `organisation` in full, unless `expand=false`.
 
         **Access:** public.
       parameters:
@@ -1326,6 +1514,7 @@ paths:
           schema:
             type: string
           example: temperature
+        - $ref: "#/components/parameters/expand"
       responses:
         "200":
           description: The entries. Their shape depends on the vocabulary.
@@ -1422,7 +1611,6 @@ paths:
         Sources are always read anonymously. No backend has an option for access keys, passwords or tokens, and none will be added.
 
         **Access:** public.
-      parameters:
       responses:
         "200":
           description: The supported source types.
@@ -2568,6 +2756,8 @@ paths:
 
         Drafts and link datasets are left out: drafts aren't listed, and link datasets have no data here.
 
+        Each dataset has its `site` in full, unless `expand=false`.
+
         **Access:** public.
       parameters:
         - name: start
@@ -2597,6 +2787,7 @@ paths:
           schema:
             type: integer
           example: 5
+        - $ref: "#/components/parameters/expand"
       responses:
         "200":
           description: The datasets with data in the period.
@@ -2617,6 +2808,17 @@ paths:
                   first: "2023-01-01T00:00:00Z"
                   last: "2023-12-31T23:50:00Z"
                   fraction: 0.98
+                  site:
+                    id: 1
+                    name: Lake Geneva
+                    type: lake
+                    geometry:
+                      type: Point
+                      coordinates: [6.5, 46.45]
+                    properties:
+                      elevation_m: 372
+                      max_depth_m: 309
+                      morphology: true
                 - dataset_id: 512
                   title: Lake Geneva CTD casts at SHL2
                   feature_type: profile
@@ -2626,6 +2828,17 @@ paths:
                   first: "2023-01-17T08:40:00Z"
                   last: "2023-12-12T09:15:00Z"
                   fraction: 0.002
+                  site:
+                    id: 1
+                    name: Lake Geneva
+                    type: lake
+                    geometry:
+                      type: Point
+                      coordinates: [6.5, 46.45]
+                    properties:
+                      elevation_m: 372
+                      max_depth_m: 309
+                      morphology: true
         "400":
           $ref: "#/components/responses/BadRequest"
         "422":
@@ -3852,18 +4065,34 @@ components:
               description: The parameters measured by the dataset's data variables, for lists and filters. Empty for link datasets.
               items:
                 $ref: "#/components/schemas/ParameterSummary"
+            site:
+              description: The site of `site_id`, or `null` if it has none. Only with `expand=true`.
+              anyOf:
+                - $ref: "#/components/schemas/Site"
+                - type: "null"
+            person:
+              description: The contact person of `person_id`, or `null`. Only with `expand=true`.
+              anyOf:
+                - $ref: "#/components/schemas/Person"
+                - type: "null"
+            organisation:
+              description: The organisation of `organisation_id`, or `null`. Only with `expand=true`.
+              anyOf:
+                - $ref: "#/components/schemas/Organisation"
+                - type: "null"
+            license:
+              description: The license of `license_id`, or `null`. Only with `expand=true`.
+              anyOf:
+                - $ref: "#/components/schemas/License"
+                - type: "null"
 
     DatasetDetail:
-      description: A dataset with its site, variables, collections and a summary of its source.
+      description: A dataset with its variables, collections and a summary of its source.
       allOf:
         - $ref: "#/components/schemas/Dataset"
         - type: object
-          required: [site, variables, collections, source]
+          required: [variables, collections, source]
           properties:
-            site:
-              anyOf:
-                - $ref: "#/components/schemas/SiteSummary"
-                - type: "null"
             variables:
               type: array
               description: All variables. Empty for link datasets.
@@ -4053,6 +4282,16 @@ components:
 
                 Set only by the migration from the old system and unique within a dataset. `null` for variables created later. It can't be set or changed through the API: it is ignored if sent.
               examples: [z]
+            parameter:
+              description: The parameter of `parameter_id`, or `null`. Only with `expand=true`.
+              anyOf:
+                - $ref: "#/components/schemas/Parameter"
+                - type: "null"
+            sensor:
+              description: The sensor of `sensor_id`, or `null`. Only with `expand=true`.
+              anyOf:
+                - $ref: "#/components/schemas/Sensor"
+                - type: "null"
 
     VariableList:
       type: array
@@ -4109,21 +4348,6 @@ components:
             id:
               type: integer
               examples: [1]
-
-    SiteSummary:
-      type: object
-      description: A short description of a site, used inside other resources.
-      required: [id, name, type]
-      properties:
-        id:
-          type: integer
-          examples: [1]
-        name:
-          type: string
-          examples: [Lake Geneva]
-        type:
-          type: string
-          examples: [lake]
 
     SiteList:
       type: array
@@ -4198,6 +4422,11 @@ components:
               minimum: 0
               description: Number of published datasets in the collection.
               examples: [2]
+            site:
+              description: The site of `site_id`, or `null` if it isn't at one. Only with `expand=true`.
+              anyOf:
+                - $ref: "#/components/schemas/Site"
+                - type: "null"
 
     CollectionDetail:
       description: A collection with its published datasets.
@@ -4322,6 +4551,11 @@ components:
               examples: [123]
             category:
               $ref: "#/components/schemas/IssueCategory"
+            variable:
+              description: The variable of `variable_id`, or `null` if the whole dataset is affected. Only with `expand=true`.
+              anyOf:
+                - $ref: "#/components/schemas/Variable"
+                - type: "null"
             created_at:
               type: string
               format: date-time
@@ -4421,6 +4655,11 @@ components:
             id:
               type: integer
               examples: [1]
+            organisation:
+              description: The organisation of `organisation_id`, or `null`. Only with `expand=true`.
+              anyOf:
+                - $ref: "#/components/schemas/Organisation"
+                - type: "null"
 
     SensorBase:
       type: object
@@ -4833,6 +5072,11 @@ components:
           $ref: "#/components/schemas/FeatureTypeName"
         site_id:
           type: [integer, "null"]
+        site:
+          description: The site of `site_id`, or `null`. Only with `expand=true`.
+          anyOf:
+            - $ref: "#/components/schemas/Site"
+            - type: "null"
         latitude:
           type: [number, "null"]
         longitude:
@@ -5090,6 +5334,14 @@ components:
         type: string
         pattern: "^-?[0-9]+(\\.[0-9]+)?(,-?[0-9]+(\\.[0-9]+)?){3}$"
       example: "6.1,46.2,7.0,46.6"
+    expand:
+      name: expand
+      in: query
+      description: Return each referenced object next to its ID, e.g. the whole site in `site` next to `site_id`. With `false`, only the IDs are returned, which makes the response smaller.
+      schema:
+        type: boolean
+        default: true
+      example: false
     dataset_id:
       name: dataset_id
       in: path
@@ -5459,6 +5711,28 @@ components:
           id: 1
           name: Lake Geneva
           type: lake
+          geometry:
+            type: Point
+            coordinates: [6.5, 46.45]
+          properties:
+            elevation_m: 372
+            max_depth_m: 309
+            morphology: true
+
+        person:
+          id: 1
+          name: John Doe
+          organisation_id: 1
+          email: john.doe@example.com
+        organisation:
+          id: 1
+          name: Eawag
+          link: https://www.eawag.ch/
+        license:
+          id: 1
+          name: CC BY 4.0
+          description: Free to share and adapt, with credit to the authors.
+          link: https://creativecommons.org/licenses/by/4.0/
         variables:
           - id: 901
             dataset_id: 123
@@ -5556,10 +5830,6 @@ components:
         updated_at: "2024-10-30T09:00:00Z"
         created_by: null
         parameters: []
-        site:
-          id: 1
-          name: Lake Geneva
-          type: lake
         variables: []
         collections: []
         source: null
@@ -5597,10 +5867,6 @@ components:
         updated_at: "2024-10-30T09:00:00Z"
         created_by: null
         parameters: []
-        site:
-          id: 1
-          name: Lake Geneva
-          type: lake
         variables: []
         collections: []
         source: null
@@ -5654,6 +5920,17 @@ components:
           water_depth_m: 110
           in_operation_since: 2019
         dataset_count: 2
+        site:
+          id: 1
+          name: Lake Geneva
+          type: lake
+          geometry:
+            type: Point
+            coordinates: [6.5, 46.45]
+          properties:
+            elevation_m: 372
+            max_depth_m: 309
+            morphology: true
         datasets:
           - id: 123
             title: LéXPLORE thermistor chain

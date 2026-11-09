@@ -32,6 +32,13 @@ Bbox = Annotated[
     examples=["6.1,46.2,7.0,46.6"],
   ),
 ]
+Expand = Annotated[
+  bool,
+  Query(
+    description="Return each referenced object next to its ID, e.g. the whole site in `site` next to `site_id`. "
+    "With `false`, only the IDs are returned.",
+  ),
+]
 
 DATE: re.Pattern[str] = re.compile(r"\d{4}-\d{2}-\d{2}")
 

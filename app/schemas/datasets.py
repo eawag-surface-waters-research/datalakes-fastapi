@@ -7,6 +7,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
 from app.enums import DatasetKind, DatasetStatus, FeatureType
+from app.schemas.sites import SiteRead
+from app.schemas.vocabularies import LicenseRead, OrganisationRead, PersonRead
 from app.sql import enum_type
 
 
@@ -57,3 +59,8 @@ class DatasetRead(DatasetBase):
   created_at: datetime
   updated_at: datetime
   created_by: int | None
+  # The referenced objects. They're only in the response with `?expand=true`, and `null` when the reference is empty.
+  site: SiteRead | None = Field(default=None, description="The site of `site_id`. Only with `expand=true`.")
+  person: PersonRead | None = Field(default=None, description="The contact person of `person_id`. Only with `expand=true`.")
+  organisation: OrganisationRead | None = Field(default=None, description="The organisation of `organisation_id`. Only with `expand=true`.")
+  license: LicenseRead | None = Field(default=None, description="The license of `license_id`. Only with `expand=true`.")

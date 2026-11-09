@@ -1,10 +1,15 @@
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy import event
 
+from app.database import engine
 from app.enums import DatasetKind, DatasetStatus, FeatureType, VariableRole
-from app.models import Collection, CollectionDataset, Dataset, Parameter, Site, SiteType, Variable
+from app.models import Collection, CollectionDataset, Dataset, License, Organisation, Parameter, Person, Site, SiteType, Variable
 from app.routes.datasets import REFERENCES
+
+# What `expand=true` adds to a dataset without references
+NO_REFERENCES = {"site": None, "person": None, "organisation": None, "license": None}
 
 
 async def test_create_dataset_defaults_to_a_draft(client):
@@ -64,14 +69,62 @@ async def test_create_dataset_with_unknown_reference_is_rejected(client, field):
   response = await client.post("/datasets", json={"title": "Data", field: 999})
   assert response.status_code == 422
   assert response.json()["code"] == "unknown_reference"
-  assert response.json()["detail"] == f"{REFERENCES[field][0]} 999 not found"
+  assert response.json()["detail"] == f"{REFERENCES[field].name} 999 not found"
 
 
 async def test_get_dataset(client):
   created = (await client.post("/datasets", json={"title": "Data"})).json()
   response = await client.get(f"/datasets/{created['id']}")
   assert response.status_code == 200
-  assert response.json() == created
+  assert response.json() == created | NO_REFERENCES  # expanded by default, but there's nothing to expand
+
+
+@pytest.fixture
+async def references(session) -> dict:
+  """A site, organisation, person and license, and the objects `expand=true` should return for them."""
+  session.add_all([SiteType(name="lake"), Organisation(id=1, name="Eawag", link="https://www.eawag.ch/")])
+  await session.flush()
+  session.add_all(
+    [
+      Site(
+        id=1, name="Lake Geneva", type="lake", geometry={"type": "Point", "coordinates": [6.5, 46.45]}, properties={"max_depth": 309}, lon_min=6.5
+      ),
+      Person(id=3, name="James Runnalls", email="james.runnalls@eawag.ch", organisation_id=1),
+      License(id=4, name="CC BY 4.0", link="https://creativecommons.org/licenses/by/4.0/"),
+    ]
+  )
+  await session.flush()
+  return {
+    # The full objects, as their own endpoints return them
+    "site": {
+      "id": 1,
+      "name": "Lake Geneva",
+      "type": "lake",
+      "geometry": {"type": "Point", "coordinates": [6.5, 46.45]},
+      "properties": {"max_depth": 309},
+    },
+    "person": {"id": 3, "name": "James Runnalls", "email": "james.runnalls@eawag.ch", "organisation_id": 1},  # not expanded further
+    "organisation": {"id": 1, "name": "Eawag", "link": "https://www.eawag.ch/"},
+    "license": {"id": 4, "name": "CC BY 4.0", "description": None, "link": "https://creativecommons.org/licenses/by/4.0/"},
+  }
+
+
+async def test_get_dataset_expands_references(client, references):
+  ids = {"site_id": 1, "person_id": 3, "organisation_id": 1, "license_id": 4}
+  created = (await client.post("/datasets", json={"title": "Data", **ids})).json()
+  assert "site" not in created  # write responses only have the IDs
+
+  response = await client.get(f"/datasets/{created['id']}")
+  assert response.status_code == 200
+  assert response.json() == created | references  # the IDs stay, next to the objects
+  assert response.json()["site_id"] == 1
+
+
+async def test_get_dataset_without_expand(client, references):
+  created = (await client.post("/datasets", json={"title": "Data", "site_id": 1, "license_id": 4})).json()
+  response = await client.get(f"/datasets/{created['id']}", params={"expand": "false"})
+  assert response.status_code == 200
+  assert response.json() == created  # only the IDs, no `site`, `person`… keys at all
 
 
 async def test_get_unknown_dataset(client):
@@ -85,8 +138,41 @@ async def test_list_datasets_leaves_out_drafts(client):
   published = (await client.post("/datasets", json={"title": "Published", "status": "published"})).json()
   draft = (await client.post("/datasets", json={"title": "Draft"})).json()
 
-  assert (await client.get("/datasets")).json() == [published]
-  assert (await client.get("/datasets", params={"status": "draft"})).json() == [draft]
+  assert (await client.get("/datasets")).json() == [published | NO_REFERENCES]
+  assert (await client.get("/datasets", params={"status": "draft", "expand": "false"})).json() == [draft]
+
+
+async def test_list_datasets_expands_references(client, references):
+  with_references = {"site_id": 1, "person_id": 3, "organisation_id": 1, "license_id": 4}
+  first = (await client.post("/datasets", json={"title": "A", "status": "published", **with_references})).json()
+  second = (await client.post("/datasets", json={"title": "B", "status": "published", "site_id": 1})).json()
+  third = (await client.post("/datasets", json={"title": "C", "status": "published"})).json()
+
+  assert (await client.get("/datasets")).json() == [
+    first | references,
+    second | NO_REFERENCES | {"site": references["site"]},  # several datasets can share a site
+    third | NO_REFERENCES,
+  ]
+  assert (await client.get("/datasets", params={"expand": "false"})).json() == [first, second, third]
+
+
+async def test_list_datasets_expands_with_one_query_per_reference(client, references):
+  """However many datasets are listed, expanding takes one query per kind of reference, not one per dataset."""
+  for title in "ABCDEF":
+    await client.post("/datasets", json={"title": title, "status": "published", "site_id": 1, "person_id": 3, "organisation_id": 1, "license_id": 4})
+
+  statements = []
+
+  def count(*args):
+    statements.append(args[2])
+
+  event.listen(engine.sync_engine, "before_cursor_execute", count)
+  try:
+    response = await client.get("/datasets")
+  finally:
+    event.remove(engine.sync_engine, "before_cursor_execute", count)
+  assert response.status_code == 200 and len(response.json()) == 6
+  assert len(statements) == 1 + len(REFERENCES)  # the datasets, then each kind of reference
 
 
 async def test_list_datasets_sorting(client, session):

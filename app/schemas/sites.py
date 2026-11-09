@@ -10,3 +10,7 @@ class SiteBase(SQLModel):
   type: str = Field(foreign_key="site_types.name", index=True)
   geometry: dict[str, Any] | None = Field(default=None, sa_type=JSONB)
   properties: dict[str, Any] = Field(default_factory=dict, sa_type=JSONB, sa_column_kwargs={"server_default": sa.text("'{}'::jsonb")})
+
+
+class SiteRead(SiteBase):
+  id: int
