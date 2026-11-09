@@ -18,11 +18,10 @@ class DatasetBase(SQLModel):
   )
   external_url: str | None = None
   feature_type: FeatureType | None = Field(default=None, index=True, sa_type=enum_type(FeatureType, "feature_type"))
-  # TODO: Add foreign keys when other resources can be created
-  # site_id: int | None = Field(default=None, foreign_key="sites.id", index=True)
-  # person_id: int | None = Field(default=None, foreign_key="persons.id", index=True)
-  # organisation_id: int | None = Field(default=None, foreign_key="organisations.id", index=True)
-  # license_id: int | None = Field(default=None, foreign_key="licenses.id", index=True)
+  site_id: int | None = Field(default=None, foreign_key="sites.id", index=True)
+  person_id: int | None = Field(default=None, foreign_key="persons.id", index=True)
+  organisation_id: int | None = Field(default=None, foreign_key="organisations.id", index=True)
+  license_id: int | None = Field(default=None, foreign_key="licenses.id", index=True)
   repository_url: str | None = None
   origin: str | None = None
   citation: str | None = None
@@ -48,11 +47,6 @@ class DatasetCreate(DatasetBase):
 
 class DatasetRead(DatasetBase):
   id: int
-  # TODO: Add foreign keys when other resources can be created
-  site_id: int | None
-  person_id: int | None
-  organisation_id: int | None
-  license_id: int | None
   kind: DatasetKind
   time_start: datetime | None
   time_end: datetime | None

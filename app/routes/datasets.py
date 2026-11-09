@@ -23,7 +23,6 @@ REFERENCES: dict[str, tuple[str, type]] = {
 
 
 async def check_references(session: SessionDep, data: DatasetCreate) -> None:
-  return  # TODO: Remove when other resources can be created
   for field, (name, model) in REFERENCES.items():
     reference_id = getattr(data, field)
     if reference_id is not None and await session.get(model, reference_id) is None:

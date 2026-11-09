@@ -4,6 +4,7 @@ import pytest
 
 from app.enums import DatasetKind, DatasetStatus, FeatureType, VariableRole
 from app.models import Collection, CollectionDataset, Dataset, Parameter, Site, SiteType, Variable
+from app.routes.datasets import REFERENCES
 
 
 async def test_create_dataset_defaults_to_a_draft(client):
@@ -58,12 +59,12 @@ async def test_external_url_is_required_for_link_datasets_only(client, data):
   assert "external_url" in response.json()["detail"]
 
 
-# TODO: Re-enable when other resources can be created
-# @pytest.mark.parametrize("field", list(REFERENCES))
-# async def test_create_dataset_with_unknown_reference_is_rejected(client, field):
-#   response = await client.post("/datasets", json={"title": "Data", field: 999})
-#   assert response.status_code == 422
-#   assert response.json()["code"] == "unknown_reference"
+@pytest.mark.parametrize("field", list(REFERENCES))
+async def test_create_dataset_with_unknown_reference_is_rejected(client, field):
+  response = await client.post("/datasets", json={"title": "Data", field: 999})
+  assert response.status_code == 422
+  assert response.json()["code"] == "unknown_reference"
+  assert response.json()["detail"] == f"{REFERENCES[field][0]} 999 not found"
 
 
 async def test_get_dataset(client):
