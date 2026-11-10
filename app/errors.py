@@ -38,8 +38,15 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
   return error_response(exc.status_code, phrase.lower().replace(" ", "_"), str(exc.detail))
 
 
+# Validation errors that keep their own code instead of `validation_error`, so clients can tell them apart. Raised with PydanticCustomError.
+OWN_CODE_ERRORS = {"unknown_option"}
+
+
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
   """One message that names each invalid field, e.g. `title: String should have at least 1 character`."""
+  for error in exc.errors():
+    if error["type"] in OWN_CODE_ERRORS:
+      return error_response(422, error["type"], error["msg"])
   messages = []
   for error in exc.errors():
     field = ".".join(str(part) for part in error["loc"][1:])  # the first part is where it was sent: body, query or path

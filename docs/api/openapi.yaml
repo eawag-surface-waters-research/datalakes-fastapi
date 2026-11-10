@@ -1606,7 +1606,7 @@ paths:
       operationId: listSourceTypes
       summary: List the supported source types
       description: |
-        Lists the backends a source can use, with the options each one accepts, so a form can be built from them. Only these options are accepted, and anything else is rejected with 422.
+        Lists the backends a source can use, with the options each one accepts. Only these options are accepted, and anything else is rejected with 422.
 
         Sources are always read anonymously. No backend has an option for access keys, passwords or tokens, and none will be added.
 
@@ -1658,11 +1658,11 @@ paths:
       operationId: testSource
       summary: Test a source without saving it
       description: |
-        Tries to list a source anonymously and returns the first files it finds, so a form can show whether the source works before it's saved.
+        Tries to list a source anonymously and returns the first files it finds.
 
-        The response is 200 whether or not the source could be read: check `ok`. An invalid config, such as one with credentials, is rejected with 422 before anything is tried.
+        The response is 200 whether or not the source could be read: check `ok`. An invalid config, such as one with credentials, an S3 `endpoint` that isn't a public HTTPS address, or an `include` pattern rclone can't read, is rejected with 422 before anything is tried.
 
-        The source is listed in the API with a 10 s timeout.
+        The source is listed including subfolder. The listing stops after 100 entries (`truncated` is then `true`) or after 10 s (`source_timeout`).
 
         **Access:** user.
       requestBody:
@@ -1700,20 +1700,11 @@ paths:
                     error: null
                     files:
                       - path: L2_ThermistorChain_202405.nc
-                        is_dir: false
                         size: 18342011
                         modified_at: "2024-06-01T00:12:40Z"
-                        included: true
                       - path: L2_ThermistorChain_202406.nc
-                        is_dir: false
                         size: 17920455
                         modified_at: "2024-07-01T00:12:38Z"
-                        included: true
-                      - path: README.md
-                        is_dir: false
-                        size: 2104
-                        modified_at: "2023-01-10T08:00:00Z"
-                        included: false
                     truncated: false
                 not_public:
                   summary: The bucket doesn't allow anonymous reads
@@ -3441,7 +3432,7 @@ components:
           type: [string, "null"]
           format: uri
           pattern: "^https://"
-          description: URL of an S3-compatible store. Leave it out for Amazon S3. Addresses in private or internal networks are rejected.
+          description: URL of an S3-compatible store, without a user name, password, query or fragment. Leave it out for Amazon S3. Addresses in private or internal networks are rejected.
           examples: [https://s3.example.org]
 
     SwitchdriveOptions:
@@ -3492,10 +3483,10 @@ components:
       description: |
         Where a dataset's files are, as sent to set or test a source. The `options` depend on the `backend`, and `GET /source-types` lists them.
 
-        Sources are read anonymously, and nothing that looks like a credential is accepted. A config is rejected with 422 if it has:
+        Sources are read anonymously. Only the options listed for a backend are accepted. A config is rejected with 422 if it has:
 
-        - an option that isn't listed for its backend (`unknown_option`),
-        - an option that looks like a credential, such as `access_key_id`, `secret_access_key`, `session_token`, `password`, `pass`, `token`, `bearer_token` or `user` (`credentials_not_allowed`),
+        - an option that isn't listed for its backend,
+        - an S3 `endpoint` that isn't a public HTTPS address, or that contains a user name or password (`validation_error`),
         - a link to a password-protected SWITCHdrive share (`credentials_not_allowed`).
       oneOf:
         - $ref: "#/components/schemas/S3SourceInput"
@@ -3615,25 +3606,20 @@ components:
 
     SourceEntry:
       type: object
-      description: A file or folder in a source.
-      required: [path, is_dir, size, modified_at, included]
+      description: A file in a source.
+      required: [path, size, modified_at]
       properties:
         path:
           type: string
           description: Path relative to the source's `path`.
           examples: [2024/L2_ThermistorChain_202406.nc]
-        is_dir:
-          type: boolean
         size:
           type: [integer, "null"]
-          description: Size in bytes. `null` for folders.
+          description: Size in bytes.
         modified_at:
           type: [string, "null"]
           format: date-time
-          description: When the file last changed in the source. `null` for folders when the backend doesn't report it.
-        included:
-          type: boolean
-          description: Whether the source's `include` patterns select this file. Folders are included when they may contain included files.
+          description: When the file last changed in the source.
 
     SourceTestResult:
       type: object
@@ -3644,18 +3630,18 @@ components:
           type: boolean
           description: Whether the source could be listed anonymously.
         error:
-          description: Why the source couldn't be read, or `null`. `code` is one of `source_not_found`, `source_not_public` or `source_timeout`.
+          description: Why the source couldn't be read, or `null`. `code` is one of `source_not_found`, `source_not_public`, `source_unreachable` (the server can't be reached, e.g. a wrong endpoint), `source_timeout` or `source_error` (anything else, with rclone's message).
           anyOf:
             - $ref: "#/components/schemas/Error"
             - type: "null"
         files:
           type: array
-          description: The first files and folders in the source, up to 100, including subfolders.
+          description: The first files the source's `include` patterns select, up to 100, including subfolders. These are the files a sync would fetch.
           items:
             $ref: "#/components/schemas/SourceEntry"
         truncated:
           type: boolean
-          description: "`true` when the source has more than 100 entries."
+          description: "`true` when there are more than 100 entries."
 
     # -------------------------------------------------------------------------
     # Sync, inspect and status
@@ -6033,8 +6019,8 @@ components:
     CredentialsRejected:
       summary: A source config with an access key
       value:
-        detail: Sources are read anonymously. Remove access_key_id and make the bucket publicly readable instead.
-        code: credentials_not_allowed
+        detail: "Unknown option 'access_key_id' for backend s3. Allowed: bucket, region, endpoint"
+        code: unknown_option
 
     UnknownOptionRejected:
       summary: An option the backend doesn't accept

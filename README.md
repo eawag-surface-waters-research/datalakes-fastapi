@@ -39,6 +39,20 @@ cp env.example .env
 nano .env
 ```
 
+Environment variables that control the API:
+
+| Variable                         | Default                 | What it controls                                                                                                                                                                                                         |
+| -------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DB_USER`                        | none                    | User for the Postgres database.                                                                                                                                                                                          |
+| `DB_PASSWORD`                    | none                    | Password for the Postgres database.                                                                                                                                                                                      |
+| `DB_DATABASE`                    | none                    | Name of the Postgres database.                                                                                                                                                                                           |
+| `DB_HOST`                        | `localhost`             | Host of the Postgres database.                                                                                                                                                                                           |
+| `DB_PORT`                        | `5432`                  | Port of the Postgres database.                                                                                                                                                                                           |
+| `PRODUCTION`                     | `false`                 | `true` sends errors to Sentry and pools database connections. Otherwise every request opens its own connection.                                                                                                          |
+| `FILESYSTEM`                     | none                    | Folder on the host that Docker Compose mounts as `/code/filesystem` in the container.                                                                                                                                    |
+| `SOURCE_ALLOW_PRIVATE_ENDPOINTS` | `false`                 | `true` accepts S3 endpoints over plain HTTP and in private networks, e.g. the local test S3 server. Never allow in production. |
+| `TEST_S3_ENDPOINT`               | `http://localhost:8333` | Only for the tests: where the local S3 server from `docker-compose.test.yml` runs.                                                                                                                                       |
+
 ### 4. Launch service
 ```console
 cd datalakes-fastapi
@@ -133,12 +147,15 @@ Always review the generated file. Autogenerate does not detect renames (it drops
 
 Pytest can be directly run with FastAPI. Tests are located in the folder `app/tests`.
 
-Navigate to the top directory of the repository to run pytest. You need to make sure the database container is running.
+Navigate to the top directory of the repository to run pytest. You need to make sure the database container is running, and the local S3 server for the source tests. The source tests also need [rclone](https://rclone.org/install/) installed.
 
 ```console
 docker compose -f docker-compose.db.yml up -d
+docker compose -f docker-compose.test.yml up -d
 uv run pytest
 ```
+
+Without the S3 server, the tests that list a source are skipped.
 
 [mit-by]: https://opensource.org/licenses/MIT
 [mit-by-shield]: https://img.shields.io/badge/License-MIT-g.svg

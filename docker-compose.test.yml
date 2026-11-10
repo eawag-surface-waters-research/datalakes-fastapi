@@ -1,0 +1,26 @@
+# Starts a local S3 server for the source tests. Buckets seeded from app/tests/s3/buckets/:
+# - public: anonymous reads allowed
+# - private: exists, but anonymous reads are denied
+# - missing: doesn't exist, but anonymous reads are allowed, so listing it gives "not found"
+services:
+  s3:
+    image: chrislusf/seaweedfs:4.53
+    container_name: datalakes_test_s3
+    command: server -s3 -s3.config=/etc/seaweedfs/s3.json -dir=/data
+    volumes:
+      - ./app/tests/s3/s3.json:/etc/seaweedfs/s3.json:ro
+    ports:
+      - "8333:8333"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8333/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  s3-seed:
+    image: rclone/rclone:1.71.2
+    depends_on:
+      s3:
+        condition: service_healthy
+    volumes:
+      - ./app/tests/s3/buckets:/buckets:ro
+    command: ["copy", "/buckets", ":s3,provider=Other,access_key_id=test-admin,secret_access_key=test-admin-secret,endpoint='http://s3:8333':"]
