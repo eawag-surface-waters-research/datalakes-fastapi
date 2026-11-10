@@ -7,16 +7,7 @@ from app.schemas.issues import IssueBase
 from app.schemas.jobs import JobBase, RegenerateRunBase
 from app.schemas.maintenance import CatalogueVersionBase, SyncTokenBase
 from app.schemas.sites import SiteBase, SiteRead
-from app.schemas.sources import (
-  S3SourceInput,
-  SourceBase,
-  SourceEntry,
-  SourceInput,
-  SourceTestResult,
-  SourceType,
-  SourceTypeOption,
-  SwitchdriveSourceInput,
-)
+from app.schemas.sources import SourceBase, SourceEntry, SourceTestResult, SourceType, SourceTypeOption
 from app.schemas.variables import VariableBase
 from app.schemas.vocabularies import (
   LicenseBase,
@@ -49,18 +40,15 @@ __all__ = [
   "PersonBase",
   "PersonRead",
   "RegenerateRunBase",
-  "S3SourceInput",
   "SensorBase",
   "SiteBase",
   "SiteRead",
   "SiteTypeBase",
   "SourceBase",
   "SourceEntry",
-  "SourceInput",
   "SourceTestResult",
   "SourceType",
   "SourceTypeOption",
-  "SwitchdriveSourceInput",
   "SyncTokenBase",
   "VariableBase",
 ]

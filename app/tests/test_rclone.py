@@ -1,49 +1,14 @@
 from datetime import UTC, datetime
 
-from app.rclone import build_remote, parse_entry, quote, rclone_env
-from app.schemas import S3SourceInput, SwitchdriveSourceInput
+import pytest
 
-# sample rclone error outputs
-NOT_FOUND = "2026/11/09 11:08:03 Failed to lsjson: error in ListJSON: directory not found\n"
-ACCESS_DENIED = "2026/11/09 11:08:03 Failed to lsjson: error in ListJSON: AccessDenied: Access Denied\n\tstatus code: 403, request id: DPXP403VQ909KYS7, host id: x\n"
-UNREACHABLE = (
-  "2026/11/09 11:08:16 ERROR : : error listing: RequestError: send request failed\n"
-  'caused by: Get "https://nonexistent.invalid/x": dial tcp: lookup nonexistent.invalid on 1.1.1.1:53: no such host\n'
-)
-UNAUTHORIZED = (
-  "2026/11/09 11:09:36 Failed to lsjson with 2 errors: last error was: error in ListJSON: couldn't list files: Username or password was incorrect: "
-  "Sabre\\DAV\\Exception\\NotAuthenticated: 401 Unauthorized\n"
-)
+from app.backends import RcloneRemote
+from app.rclone import connection_string, parse_entry, quote, rclone_env
 
 
-def s3(**options) -> S3SourceInput:
-  path = options.pop("path", "")
-  return S3SourceInput.model_validate({"backend": "s3", "options": {"bucket": "eawag-lexplore", **options}, "path": path})
-
-
-def switchdrive(path: str = "") -> SwitchdriveSourceInput:
-  return SwitchdriveSourceInput.model_validate(
-    {"backend": "switchdrive", "options": {"share_url": "https://drive.switch.ch/index.php/s/aB3dE5fG7hJ9kL1"}, "path": path}
-  )
-
-
-def test_build_remote_for_amazon_s3():
-  remote = build_remote(s3(region="eu-central-1", path="thermistorchain/Level2/"))
-  assert remote == ":s3,provider='AWS',env_auth='false',region='eu-central-1':eawag-lexplore/thermistorchain/Level2"
-
-
-def test_build_remote_for_the_whole_bucket():
-  assert build_remote(s3()) == ":s3,provider='AWS',env_auth='false':eawag-lexplore"
-
-
-def test_build_remote_for_an_s3_compatible_store():
-  remote = build_remote(s3(endpoint="https://s3.example.org"))
-  assert remote == ":s3,provider='Other',env_auth='false',endpoint='https://s3.example.org':eawag-lexplore"
-
-
-def test_build_remote_for_a_switchdrive_share_uses_only_the_token():
-  remote = build_remote(switchdrive("Level2"))
-  assert remote == ":webdav,url='https://drive.switch.ch/public.php/webdav/',vendor='owncloud',user='aB3dE5fG7hJ9kL1':Level2"
+def test_connection_string():
+  remote = RcloneRemote(type="s3", params={"provider": "AWS", "env_auth": "false"}, root="bucket/prefix")
+  assert connection_string(remote) == ":s3,provider='AWS',env_auth='false':bucket/prefix"
 
 
 def test_quote_doubles_quotes_so_a_value_cant_add_options():
@@ -51,9 +16,22 @@ def test_quote_doubles_quotes_so_a_value_cant_add_options():
   assert quote("a,b:c") == "'a,b:c'"
 
 
-def test_build_remote_escapes_values():
-  remote = build_remote(s3(endpoint="https://s3.example.org/a',access_key_id='x"))
-  assert remote == ":s3,provider='Other',env_auth='false',endpoint='https://s3.example.org/a'',access_key_id=''x':eawag-lexplore"
+def test_connection_string_escapes_values():
+  remote = RcloneRemote(type="s3", params={"endpoint": "https://s3.example.org/a',access_key_id='x"}, root="bucket")
+  assert connection_string(remote) == ":s3,endpoint='https://s3.example.org/a'',access_key_id=''x':bucket"
+
+
+@pytest.mark.parametrize(
+  "remote",
+  [
+    RcloneRemote(type="s3,access_key_id=x", params={}, root=""),
+    RcloneRemote(type="s3", params={"provider=AWS,access_key_id": "x"}, root=""),
+  ],
+)
+def test_connection_string_rejects_invalid_names(remote):
+  """Backend and parameter names come from the backend's code, not from users, but they can't be quoted, so they're checked too."""
+  with pytest.raises(ValueError):
+    connection_string(remote)
 
 
 def test_rclone_env_leaves_out_credentials(monkeypatch):

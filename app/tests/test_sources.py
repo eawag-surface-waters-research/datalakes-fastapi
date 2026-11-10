@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from app import rclone
-from app.schemas.sources import S3Options, SwitchdriveOptions
+from app.backends import BACKENDS
 
 
 async def test_list_source_types(client):
@@ -43,7 +43,7 @@ async def test_source_types_list_exactly_the_accepted_options(client):
   """The options shown to clients are the allowlist that's enforced."""
   response = await client.get("/source-types")
   listed = {source_type["backend"]: [option["name"] for option in source_type["options"]] for source_type in response.json()}
-  assert listed == {"s3": list(S3Options.model_fields), "switchdrive": list(SwitchdriveOptions.model_fields)}
+  assert listed == {backend.info.id: list(backend.model_fields) for backend in BACKENDS}
 
 
 @pytest.mark.parametrize(

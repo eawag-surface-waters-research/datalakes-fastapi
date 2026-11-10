@@ -1625,17 +1625,14 @@ paths:
                   path_description: Prefix inside the bucket, e.g. `thermistorchain/Level2`. Empty for the whole bucket.
                   options:
                     - name: bucket
-                      type: string
                       required: true
                       description: Name of the bucket.
                       example: eawag-lexplore
                     - name: region
-                      type: string
                       required: false
                       description: Region of the bucket, for Amazon S3.
                       example: eu-central-1
                     - name: endpoint
-                      type: string
                       required: false
                       description: URL of an S3-compatible store. Leave it out for Amazon S3. Must be a public HTTPS address.
                       example: https://s3.example.org
@@ -1645,7 +1642,6 @@ paths:
                   path_description: Folder inside the share, e.g. `Level2`. Empty for the whole share.
                   options:
                     - name: share_url
-                      type: string
                       required: true
                       description: The public link of the share. Only the share token in it is stored.
                       example: https://drive.switch.ch/index.php/s/aB3dE5fG7hJ9kL1
@@ -3563,18 +3559,17 @@ components:
 
     SourceTypeOption:
       type: object
-      required: [name, type, required, description, example]
+      description: An option of a backend.
+      required: [name, required, description, example]
       properties:
         name:
           type: string
-        type:
-          type: string
-          enum: [string, integer, boolean]
         required:
           type: boolean
         description:
           type: string
         example:
+          type: string
           description: An example value.
 
     SourceType:

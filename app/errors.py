@@ -1,9 +1,11 @@
 from http import HTTPStatus
+from typing import LiteralString
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from pydantic_core import PydanticCustomError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
@@ -40,6 +42,11 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
 
 # Validation errors that keep their own code instead of `validation_error`, so clients can tell them apart. Raised with PydanticCustomError.
 OWN_CODE_ERRORS = {"unknown_option"}
+
+
+def invalid(detail: str, error_type: LiteralString = "value_error") -> PydanticCustomError:
+  """A validation error with the message as it is, without pydantic's `Value error, ` prefix."""
+  return PydanticCustomError(error_type, "{detail}", {"detail": detail})
 
 
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:

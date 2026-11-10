@@ -2,10 +2,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Body
 
+from app.backends import SOURCE_TYPES, SourceInput
 from app.errors import ErrorResponse
 from app.rclone import probe_source
-from app.schemas import SourceInput, SourceTestResult, SourceType
-from app.source_types import SOURCE_TYPES
+from app.schemas import SourceTestResult, SourceType
 
 router = APIRouter(tags=["Sources"])
 
