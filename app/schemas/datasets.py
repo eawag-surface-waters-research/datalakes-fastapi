@@ -1,12 +1,13 @@
 from datetime import datetime
 from typing import Any, Self
 
-from pydantic import model_validator
+from pydantic import ConfigDict, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
 from app.enums import DatasetKind, DatasetStatus, FeatureType
+from app.errors import invalid
 from app.schemas.sites import SiteRead
 from app.schemas.vocabularies import LicenseRead, OrganisationRead, PersonRead
 from app.sql import enum_type
@@ -45,6 +46,49 @@ class DatasetCreate(DatasetBase):
     if self.kind == DatasetKind.data and self.external_url:
       raise PydanticCustomError("external_url_not_allowed", "Only a link dataset can have an external_url")
     return self
+
+
+class DatasetUpdate(SQLModel):
+  """
+  The fields to change. Fields that aren't sent stay as they are, and `null` clears a field.
+  Anything else is rejected, e.g. `kind`, which can't be changed.
+  """
+
+  model_config = ConfigDict(extra="forbid")  # type: ignore[assignment]
+
+  title: str | None = Field(default=None, min_length=1)
+  description: str | None = None
+  status: DatasetStatus | None = None
+  external_url: str | None = None
+  feature_type: FeatureType | None = None
+  site_id: int | None = None
+  person_id: int | None = None
+  organisation_id: int | None = None
+  license_id: int | None = None
+  repository_url: str | None = None
+  origin: str | None = None
+  citation: str | None = None
+  datasource_link: str | None = None
+  plot_config: dict[str, Any] | None = None
+  update_interval: int | None = Field(default=None, ge=1)
+  sync_interval: int | None = Field(default=None, ge=1)
+  latitude: float | None = Field(default=None, ge=-90, le=90)
+  longitude: float | None = Field(default=None, ge=-180, le=180)
+
+  @model_validator(mode="before")
+  @classmethod
+  def kind_cant_change(cls, data: Any) -> Any:
+    if isinstance(data, dict) and "kind" in data:
+      raise invalid("kind can't be changed")
+    return data
+
+  @field_validator("title", "status")
+  @classmethod
+  def not_null(cls, value: Any) -> Any:
+    # only runs for fields that were sent, so a missing `title` is fine but `"title": null` isn't
+    if value is None:
+      raise invalid("Can't be null")
+    return value
 
 
 class DatasetRead(DatasetBase):

@@ -1,6 +1,6 @@
 from app.schemas.collections import CollectionBase
 from app.schemas.coverage import CoverageBase
-from app.schemas.datasets import DatasetBase, DatasetCreate, DatasetRead
+from app.schemas.datasets import DatasetBase, DatasetCreate, DatasetRead, DatasetUpdate
 from app.schemas.exports import ExportBase
 from app.schemas.files import FileBase
 from app.schemas.issues import IssueBase
@@ -28,6 +28,7 @@ __all__ = [
   "DatasetBase",
   "DatasetCreate",
   "DatasetRead",
+  "DatasetUpdate",
   "ExportBase",
   "FileBase",
   "IssueBase",

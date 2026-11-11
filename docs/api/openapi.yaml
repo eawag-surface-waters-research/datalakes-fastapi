@@ -444,12 +444,16 @@ paths:
       description: |
         Deletes the dataset and everything that belongs to it: variables, issues, source, file index, jobs and collection memberships. Derived data (raw files, Zarr stores, exports, cache) is removed in the background.
 
+        A dataset can't be deleted while a fetch, sync or rebuild of it is queued or running (409): cancel the job first.
+
         **Access:** user (own datasets) or owner.
       responses:
         "204":
           description: The dataset was deleted.
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
 
   # ---------------------------------------------------------------------------
   # Variables

@@ -2,10 +2,11 @@ from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import event
+from sqlmodel import select
 
 from app.database import engine
-from app.enums import DatasetKind, DatasetStatus, FeatureType, VariableRole
-from app.models import Collection, CollectionDataset, Dataset, License, Organisation, Parameter, Person, Site, SiteType, Variable
+from app.enums import DatasetKind, DatasetStatus, FeatureType, JobStatus, JobType, SourceBackend, VariableRole
+from app.models import Collection, CollectionDataset, Dataset, Job, License, Organisation, Parameter, Person, Site, SiteType, Source, Variable
 from app.routes.datasets import REFERENCES
 
 # What `expand=true` adds to a dataset without references
@@ -281,3 +282,114 @@ async def test_list_datasets_by_bbox(client, catalogue):
   assert await filtered_titles(client, bbox="6,46,7,47") == ["Geneva thermistor chain"]
   assert await filtered_titles(client, bbox="8,47,9,48") == ["Zurich oxygen"]
   assert await filtered_titles(client, bbox="0,0,1,1") == []  # datasets without a location are never inside a box
+
+
+async def create(client, **data) -> dict:
+  response = await client.post("/datasets", json={"title": "Data", **data})
+  assert response.status_code == 201
+  return response.json()
+
+
+async def test_update_dataset(client):
+  created = await create(client, description="Old", origin="measurement")
+  response = await client.patch(f"/datasets/{created['id']}", json={"status": "published", "description": None})
+  assert response.status_code == 200
+  body = response.json()
+  assert body["status"] == "published"
+  assert body["description"] is None  # `null` clears a field
+  assert body["origin"] == "measurement"  # fields not sent stay as they are
+  assert body["version"] == 2
+  assert body["updated_at"] >= created["updated_at"]
+  assert "site" not in body  # references are never expanded here
+  assert (await client.get(f"/datasets/{created['id']}")).json()["status"] == "published"
+
+
+async def test_update_without_changes_keeps_the_version(client):
+  created = await create(client, origin="measurement")
+  for data in [{}, {"title": "Data", "origin": "measurement"}]:
+    response = await client.patch(f"/datasets/{created['id']}", json=data)
+    assert response.status_code == 200
+    assert response.json()["version"] == 1
+
+
+async def test_each_change_increases_the_version(client):
+  created = await create(client)
+  await client.patch(f"/datasets/{created['id']}", json={"title": "First"})
+  response = await client.patch(f"/datasets/{created['id']}", json={"title": "Second"})
+  assert response.json()["version"] == 3
+
+
+async def test_update_references(client, references):
+  created = await create(client)
+  response = await client.patch(f"/datasets/{created['id']}", json={"site_id": 1, "license_id": 4})
+  assert response.status_code == 200
+  assert response.json()["site_id"] == 1
+  assert response.json()["license_id"] == 4
+
+
+@pytest.mark.parametrize("field", list(REFERENCES))
+async def test_update_with_unknown_reference_is_rejected(client, field):
+  created = await create(client)
+  response = await client.patch(f"/datasets/{created['id']}", json={field: 999})
+  assert response.status_code == 422
+  assert response.json() == {"detail": f"{REFERENCES[field].name} 999 not found", "code": "unknown_reference"}
+
+
+async def test_update_link_dataset_url(client):
+  created = await create(client, kind="link", external_url="https://www.alplakes.eawag.ch")
+  response = await client.patch(f"/datasets/{created['id']}", json={"external_url": "https://www.alplakes.eawag.ch/geneva"})
+  assert response.status_code == 200
+  assert response.json()["external_url"] == "https://www.alplakes.eawag.ch/geneva"
+
+
+@pytest.mark.parametrize("external_url", [None, ""])
+async def test_link_dataset_cant_lose_its_url(client, external_url):
+  created = await create(client, kind="link", external_url="https://www.alplakes.eawag.ch")
+  response = await client.patch(f"/datasets/{created['id']}", json={"external_url": external_url})
+  assert response.status_code == 422
+  assert response.json() == {"detail": "external_url: A link dataset needs an external_url", "code": "validation_error"}
+
+
+async def test_update_unknown_dataset(client):
+  response = await client.patch("/datasets/999", json={"title": "New"})
+  assert response.status_code == 404
+  assert response.json() == {"detail": "Dataset 999 not found", "code": "not_found"}
+
+
+async def test_delete_dataset_and_what_belongs_to_it(client, session, catalogue):
+  geneva = (await session.exec(select(Dataset).where(Dataset.title == "Geneva thermistor chain"))).one()
+  dataset_id = geneva.id
+  session.add_all(
+    [
+      Source(dataset_id=dataset_id, backend=SourceBackend.s3, options={"bucket": "eawag-lexplore"}, last_tested_at=datetime.now(UTC)),
+      Job(dataset_id=dataset_id, type=JobType.fetch, status=JobStatus.succeeded),  # jobs that ended don't block the delete
+    ]
+  )
+  await session.commit()
+
+  response = await client.delete(f"/datasets/{dataset_id}")
+  assert response.status_code == 204
+  assert response.content == b""
+  assert (await client.get(f"/datasets/{dataset_id}")).status_code == 404
+  for model in (Variable, Source, Job, CollectionDataset):
+    assert (await session.exec(select(model).where(model.dataset_id == dataset_id))).all() == []  # type: ignore[attr-defined]
+  assert await session.get(Collection, catalogue.id) is not None  # the collection itself stays
+  assert len((await session.exec(select(Dataset))).all()) == 2  # the other datasets stay
+
+
+async def test_delete_unknown_dataset(client):
+  response = await client.delete("/datasets/999")
+  assert response.status_code == 404
+  assert response.json() == {"detail": "Dataset 999 not found", "code": "not_found"}
+
+
+@pytest.mark.parametrize("status", [JobStatus.queued, JobStatus.running])
+async def test_delete_dataset_while_a_job_is_in_progress(client, session, status):
+  created = await create(client)
+  job = Job(dataset_id=created["id"], type=JobType.sync, status=status)
+  session.add(job)
+  await session.commit()
+  response = await client.delete(f"/datasets/{created['id']}")
+  assert response.status_code == 409
+  assert response.json() == {"detail": f"Dataset {created['id']} already has a job {status} (job {job.id})", "code": "job_in_progress"}
+  assert (await client.get(f"/datasets/{created['id']}")).status_code == 200
