@@ -7,8 +7,8 @@ from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import app.models
+from app.api import app
 from app.database import engine, get_session
-from app.main import app
 
 """Each test will run in a transaction that is rolled back at the end of the test, so the database is empty for each test."""
 

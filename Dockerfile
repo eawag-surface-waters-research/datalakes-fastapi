@@ -22,4 +22,4 @@ ENV PATH="/code/.venv/bin:$PATH"
 COPY ./app /code/app
 COPY ./alembic.ini /code/alembic.ini
 COPY ./migrations /code/migrations
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--no-server-header"]
+CMD ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--no-server-header"]

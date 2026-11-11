@@ -13,9 +13,9 @@ from sqlmodel import SQLModel, col
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import app.models
+from app.api import app
 from app.database import DATABASE_URL, engine, get_session
 from app.enums import JobStatus, JobType
-from app.main import app
 from app.models import Job
 from app.worker import JobContext, Worker, enqueue
 from app.worker.handlers import Handler, NoParams
