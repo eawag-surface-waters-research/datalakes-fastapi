@@ -158,6 +158,7 @@ Decided on 2026-10-30.
 
 - No extra service for the queue. Jobs survive restarts, and job history lives in the same database as the datasets.
 - Redis stays a pure cache that can safely evict entries.
+- The queue is the `jobs` table itself, not a library such as procrastinate. Workers claim jobs with `SELECT … FOR UPDATE SKIP LOCKED` and hold a lock while a job runs, so a job whose worker died is queued again.
 
 ## 12. Old iframe links keep working through `legacy_axis`
 

@@ -1,3 +1,5 @@
+import argparse
+import asyncio
 import logging
 import os
 import sys
@@ -12,7 +14,8 @@ from fastapi.middleware.gzip import GZipMiddleware
 
 from app.database import DATABASE_URL, check_db_connection, engine, get_safe_db_url
 from app.errors import add_exception_handlers
-from app.routes import datasets, sources
+from app.routes import datasets, jobs, sources
+from app.worker import run_worker
 
 load_dotenv()
 
@@ -103,6 +106,7 @@ add_exception_handlers(app)
 
 app.include_router(datasets.router)
 app.include_router(sources.router)
+app.include_router(jobs.router)
 
 
 @app.get("/", include_in_schema=False)
@@ -115,5 +119,22 @@ def welcome():
   }
 
 
+def main(argv: list[str] | None = None) -> None:
+  parser = argparse.ArgumentParser(prog="python -m app.main", description="Starts the API or the worker that runs its jobs.")
+  parser.add_argument("--worker", action="store_true", help="Start the worker instead of the API.")
+  worker_options = parser.add_argument_group("worker options")
+  worker_options.add_argument(
+    "--poll-interval",
+    type=float,
+    default=float(os.getenv("WORKER_POLL_INTERVAL", "2")),
+    help="Seconds between checks for new jobs and cancel requests (env WORKER_POLL_INTERVAL).",
+  )
+  args = parser.parse_args(argv)
+  if args.worker:
+    asyncio.run(run_worker(args.poll_interval))
+  else:
+    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True, server_header=False)
+
+
 if __name__ == "__main__":
-  uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True, server_header=False)
+  main()

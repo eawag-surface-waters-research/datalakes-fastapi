@@ -4,7 +4,7 @@ from app.schemas.datasets import DatasetBase, DatasetCreate, DatasetRead
 from app.schemas.exports import ExportBase
 from app.schemas.files import FileBase
 from app.schemas.issues import IssueBase
-from app.schemas.jobs import JobBase, RegenerateRunBase
+from app.schemas.jobs import JobBase, JobRead, RegenerateRunBase
 from app.schemas.maintenance import CatalogueVersionBase, SyncTokenBase
 from app.schemas.sites import SiteBase, SiteRead
 from app.schemas.sources import SourceBase, SourceEntry, SourceTestResult, SourceType, SourceTypeOption
@@ -32,6 +32,7 @@ __all__ = [
   "FileBase",
   "IssueBase",
   "JobBase",
+  "JobRead",
   "LicenseBase",
   "LicenseRead",
   "OrganisationBase",

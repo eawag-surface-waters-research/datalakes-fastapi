@@ -47,8 +47,31 @@ services:
       retries: 5
     restart: unless-stopped
     volumes:
-      - "${FILESYSTEM}:/code/filesystem"
+      - "${FILESYSTEM}:/code/filesystem:ro"
     ports:
       - 8000:8000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+  worker:
+    build: .
+    command: ["python", "-m", "app.main", "--worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      FILESYSTEM: "/code/filesystem"
+      DB_USER: "${DB_USER}"
+      DB_PASSWORD: "${DB_PASSWORD}"
+      DB_HOST: "${DB_HOST}"
+      DB_PORT: "${DB_PORT}"
+      DB_DATABASE: "${DB_DATABASE}"
+      PRODUCTION: "${PRODUCTION}"
+      SOURCE_ALLOW_PRIVATE_ENDPOINTS: "${SOURCE_ALLOW_PRIVATE_ENDPOINTS}"
+    container_name:
+      datalakes-worker
+    restart: unless-stopped
+    stop_grace_period: 30s # time to queue the running jobs again before Docker kills the worker
+    volumes:
+      - "${FILESYSTEM}:/code/filesystem"
     extra_hosts:
       - "host.docker.internal:host-gateway"

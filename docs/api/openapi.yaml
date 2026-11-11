@@ -2155,7 +2155,6 @@ paths:
                   created_at: "2024-10-30T10:20:00Z"
                   started_at: null
                   finished_at: null
-                  url: /jobs/5812
         "404":
           $ref: "#/components/responses/NotFound"
         "422":
@@ -2201,7 +2200,6 @@ paths:
                   created_at: "2024-10-30T00:00:02Z"
                   started_at: "2024-10-30T00:00:03Z"
                   finished_at: "2024-10-30T00:05:31Z"
-                  url: /jobs/5790
         "422":
           $ref: "#/components/responses/ValidationError"
 
@@ -2256,12 +2254,11 @@ paths:
                 status: cancelled
                 progress: null
                 error: null
-                log: Cancelled before it started
+                log: Was cancelled before it started
                 result: null
                 created_at: "2024-10-30T10:20:00Z"
                 started_at: null
                 finished_at: "2024-10-30T10:21:05Z"
-                url: /jobs/5812
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -3262,7 +3259,7 @@ components:
       type: object
       description: |
         A piece of background work run by the worker. A job moves from `queued` to `running`, then ends as `succeeded`, `failed` or `cancelled`.
-      required: [id, dataset_id, type, status, progress, error, log, result, created_at, started_at, finished_at, url]
+      required: [id, dataset_id, type, status, progress, error, log, result, created_at, started_at, finished_at]
       properties:
         id:
           type: integer
@@ -3314,11 +3311,6 @@ components:
           type: [string, "null"]
           format: date-time
           description: When the job ended.
-        url:
-          type: string
-          format: uri-reference
-          description: Poll this URL to follow the job.
-          examples: [/jobs/5812]
       examples:
         - id: 5812
           dataset_id: 123
@@ -3331,7 +3323,6 @@ components:
           created_at: "2024-03-01T10:20:00Z"
           started_at: null
           finished_at: null
-          url: /jobs/5812
 
     JobType:
       type: string
@@ -5632,7 +5623,7 @@ components:
                 detail: "limit: Input should be less than or equal to 1000"
                 code: validation_error
     JobAccepted:
-      description: The work was queued. Poll the job's `url` to follow it.
+      description: The work was queued. Poll `GET /jobs/{job_id}` (the `Location` header) to follow it.
       headers:
         Location:
           description: URL of the job.
@@ -6037,7 +6028,6 @@ components:
         created_at: "2024-10-30T10:20:00Z"
         started_at: null
         finished_at: null
-        url: /jobs/5812
 
     FailedSyncJob:
       summary: A failed sync, with one file that couldn't be processed
@@ -6062,7 +6052,6 @@ components:
         created_at: "2024-10-30T00:00:02Z"
         started_at: "2024-10-30T00:00:03Z"
         finished_at: "2024-10-30T00:05:31Z"
-        url: /jobs/5790
 
     InspectedFile:
       summary: Suggested variables for a thermistor chain file

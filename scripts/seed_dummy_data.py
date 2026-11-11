@@ -1,8 +1,7 @@
-"""Inserts dummy sites, persons, organisations and licenses, so datasets can reference them while there are no endpoints to create them.
+"""
+Inserts dummy sites, persons, organisations and licenses, so datasets can reference them while there are no endpoints to create them.
 
-The rows come from the old `db/default_data.sql` (the `lakes` table became `sites`). Safe to run more than once: rows that exist are left alone.
-
-    uv run python -m scripts.seed_dummy_data
+uv run python -m scripts.seed_dummy_data
 """
 
 import asyncio

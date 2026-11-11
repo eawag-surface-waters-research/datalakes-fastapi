@@ -1,5 +1,6 @@
+from collections.abc import Iterable, Mapping
 from http import HTTPStatus
-from typing import LiteralString
+from typing import Any, LiteralString
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -49,16 +50,22 @@ def invalid(detail: str, error_type: LiteralString = "value_error") -> PydanticC
   return PydanticCustomError(error_type, "{detail}", {"detail": detail})
 
 
+def format_validation_errors(errors: Iterable[Mapping[str, Any]]) -> str:
+  """Pydantic's errors as one message that names each invalid field"""
+  messages = []
+  for error in errors:
+    field = ".".join(str(part) for part in error["loc"])
+    messages.append(f"{field}: {error['msg']}" if field else error["msg"])
+  return "; ".join(messages)
+
+
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
   """One message that names each invalid field, e.g. `title: String should have at least 1 character`."""
   for error in exc.errors():
     if error["type"] in OWN_CODE_ERRORS:
       return error_response(422, error["type"], error["msg"])
-  messages = []
-  for error in exc.errors():
-    field = ".".join(str(part) for part in error["loc"][1:])  # the first part is where it was sent: body, query or path
-    messages.append(f"{field}: {error['msg']}" if field else error["msg"])
-  return error_response(422, "validation_error", "; ".join(messages))
+  # the first part of `loc` is where the field was sent: body, query or path
+  return error_response(422, "validation_error", format_validation_errors({**error, "loc": error["loc"][1:]} for error in exc.errors()))
 
 
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:

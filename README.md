@@ -41,17 +41,17 @@ nano .env
 
 Environment variables that control the API:
 
-| Variable                         | Default                 | What it controls                                                                                                                                                                                                         |
-| -------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `DB_USER`                        | none                    | User for the Postgres database.                                                                                                                                                                                          |
-| `DB_PASSWORD`                    | none                    | Password for the Postgres database.                                                                                                                                                                                      |
-| `DB_DATABASE`                    | none                    | Name of the Postgres database.                                                                                                                                                                                           |
-| `DB_HOST`                        | `localhost`             | Host of the Postgres database.                                                                                                                                                                                           |
-| `DB_PORT`                        | `5432`                  | Port of the Postgres database.                                                                                                                                                                                           |
-| `PRODUCTION`                     | `false`                 | `true` sends errors to Sentry and pools database connections. Otherwise every request opens its own connection.                                                                                                          |
-| `FILESYSTEM`                     | none                    | Folder on the host that Docker Compose mounts as `/code/filesystem` in the container.                                                                                                                                    |
+| Variable                         | Default                 | What it controls                                                                                                               |
+| -------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `DB_USER`                        | none                    | User for the Postgres database.                                                                                                |
+| `DB_PASSWORD`                    | none                    | Password for the Postgres database.                                                                                            |
+| `DB_DATABASE`                    | none                    | Name of the Postgres database.                                                                                                 |
+| `DB_HOST`                        | `localhost`             | Host of the Postgres database.                                                                                                 |
+| `DB_PORT`                        | `5432`                  | Port of the Postgres database.                                                                                                 |
+| `PRODUCTION`                     | `false`                 | `true` sends errors to Sentry and pools database connections. Otherwise every request opens its own connection.                |
+| `FILESYSTEM`                     | none                    | Folder on the host that Docker Compose mounts as `/code/filesystem` in the container.                                          |
 | `SOURCE_ALLOW_PRIVATE_ENDPOINTS` | `false`                 | `true` accepts S3 endpoints over plain HTTP and in private networks, e.g. the local test S3 server. Never allow in production. |
-| `TEST_S3_ENDPOINT`               | `http://localhost:8333` | Only for the tests: where the local S3 server from `docker-compose.test.yml` runs.                                                                                                                                       |
+| `TEST_S3_ENDPOINT`               | `http://localhost:8333` | Only for the tests: where the local S3 server from `docker-compose.test.yml` runs.                                             |
 
 ### 4. Launch service
 ```console
@@ -95,7 +95,7 @@ dependencies, including the dev dependencies such as pytest.
 uv sync
 ```
 
-### 3. Run API
+### 3. Run API and Worker
 
 Manually set filesystem path in main.py if files are NOT located in the `filesystem` folder within the repository.
 
@@ -106,6 +106,15 @@ uv run python -m app.main # starts the API on http://localhost:8000
 ```
 
 The database schema is created by migrations. Run `uv run alembic upgrade head` after starting a fresh database and after pulling new migrations. With `docker-compose.yml`, the `migrate` service does this before the API starts.
+
+Jobs (fetches, syncs, rebuilds, exports) are run by a separate worker process. Run it next to the API:
+
+```console
+uv run python -m app.main --worker                       # runs queued jobs until Ctrl+C
+uv run python -m scripts.queue_test_job --seconds 30     # queues a test job, to check that the worker runs, then follow it at /jobs/{job_id}
+```
+
+With `docker-compose.yml`, the `worker` service runs it.
 
 ### 4. Contribute
 

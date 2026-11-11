@@ -43,3 +43,5 @@ class Job(JobBase, table=True):
   created_at: datetime | None = created_at_field()
   started_at: datetime | None = Field(default=None, sa_type=TIMESTAMPTZ)
   finished_at: datetime | None = Field(default=None, sa_type=TIMESTAMPTZ)
+  cancel_requested_at: datetime | None = Field(default=None, sa_type=TIMESTAMPTZ)
+  restarts: int = Field(default=0, sa_column_kwargs={"server_default": "0"})
