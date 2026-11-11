@@ -13,7 +13,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from app.database import DATABASE_URL, check_db_connection, engine, get_safe_db_url
 from app.errors import add_exception_handlers
 from app.observability import setup_observability
-from app.routes import datasets, jobs, sources
+from app.routes import datasets, jobs, sources, sync
 
 setup_observability()
 logger = logging.getLogger(__name__)
@@ -94,6 +94,7 @@ add_exception_handlers(app)
 
 app.include_router(datasets.router)
 app.include_router(sources.router)
+app.include_router(sync.router)
 app.include_router(jobs.router)
 
 

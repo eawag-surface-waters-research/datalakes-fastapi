@@ -2901,13 +2901,6 @@ paths:
                   $ref: "#/components/examples/ReadyExport"
         "202":
           description: The export is being prepared. Poll its `url`.
-          headers:
-            Location:
-              description: URL of the export.
-              schema:
-                type: string
-                format: uri-reference
-              example: /exports/9f2c4e7a1b3d5f60
           content:
             application/json:
               schema:
@@ -3061,13 +3054,6 @@ paths:
       responses:
         "202":
           description: The run started. Poll its `url`.
-          headers:
-            Location:
-              description: URL of the run.
-              schema:
-                type: string
-                format: uri-reference
-              example: /admin/regenerate/7
           content:
             application/json:
               schema:
@@ -5623,14 +5609,7 @@ components:
                 detail: "limit: Input should be less than or equal to 1000"
                 code: validation_error
     JobAccepted:
-      description: The work was queued. Poll `GET /jobs/{job_id}` (the `Location` header) to follow it.
-      headers:
-        Location:
-          description: URL of the job.
-          schema:
-            type: string
-            format: uri-reference
-          example: /jobs/5812
+      description: The work was queued. Poll `GET /jobs/{job_id}` with its `id` to follow it.
       content:
         application/json:
           schema:

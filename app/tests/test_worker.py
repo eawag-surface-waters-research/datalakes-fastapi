@@ -146,12 +146,20 @@ async def test_job_failing_unexpectedly(worker_engine, make_worker):
   assert job.error == "Unexpected error: ValueError: boom"
 
 
-async def test_job_without_handler_fails(worker_engine, make_worker):
+async def test_fetch_job_without_dataset_fails(worker_engine, make_worker):
   job_id = await queue(worker_engine, JobType.fetch)
   await make_worker().run_once()
   job = await get_job(worker_engine, job_id)
   assert job.status == JobStatus.failed
-  assert job.error == "The worker can't run jobs of type fetch yet"
+  assert job.error == "A fetch job needs a dataset"
+
+
+async def test_job_without_handler_fails(worker_engine, make_worker):
+  job_id = await queue(worker_engine, JobType.export)
+  await make_worker().run_once()
+  job = await get_job(worker_engine, job_id)
+  assert job.status == JobStatus.failed
+  assert job.error == "The worker can't run jobs of type export yet"
 
 
 class StepsParams(BaseModel):

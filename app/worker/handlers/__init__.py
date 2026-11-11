@@ -7,9 +7,10 @@ To add a job type:
 
 from app.enums import JobType
 from app.worker.handlers.base import Handler, NoParams
+from app.worker.handlers.fetch import FetchHandler
 from app.worker.handlers.test import TestHandler
 
-HANDLERS: list[type[Handler]] = [TestHandler]
+HANDLERS: list[type[Handler]] = [FetchHandler, TestHandler]
 HANDLERS_BY_TYPE: dict[JobType, Handler] = {handler.type: handler() for handler in HANDLERS}
 
-__all__ = ["HANDLERS", "HANDLERS_BY_TYPE", "Handler", "NoParams", "TestHandler"]
+__all__ = ["HANDLERS", "HANDLERS_BY_TYPE", "FetchHandler", "Handler", "NoParams", "TestHandler"]
