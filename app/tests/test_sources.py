@@ -4,9 +4,14 @@ import socket
 from urllib.parse import urlsplit
 
 import pytest
+from sqlmodel import select
 
 from app import rclone
 from app.backends import BACKENDS
+from app.enums import DatasetKind, JobStatus, JobType
+from app.models import Dataset, Job, Source
+from app.routes import sources as sources_routes
+from app.schemas import SourceTestResult
 
 
 async def test_list_source_types(client):
@@ -254,3 +259,124 @@ async def test_unreachable_endpoint_is_reported(client, monkeypatch):
   assert body["ok"] is False
   assert body["error"]["code"] == "source_unreachable"
   assert body["error"]["detail"].startswith("Couldn't connect to the source: ")
+
+
+async def add_dataset(session, kind=DatasetKind.data) -> Dataset:
+  dataset = Dataset(title="Thermistor chain", kind=kind, external_url="https://example.org" if kind == DatasetKind.link else None)
+  session.add(dataset)
+  await session.commit()
+  await session.refresh(dataset)
+  return dataset
+
+
+async def stored_source(session, dataset_id) -> Source | None:
+  return (await session.exec(select(Source).where(Source.dataset_id == dataset_id).execution_options(populate_existing=True))).first()
+
+
+async def test_set_source(client, session, s3_endpoint):
+  dataset = await add_dataset(session)
+  response = await client.put(f"/datasets/{dataset.id}/source", json=local_s3(s3_endpoint, "public", path="L2/", include=["*.nc"]))
+  assert response.status_code == 201
+  body = response.json()
+  assert body["dataset_id"] == dataset.id
+  assert body["backend"] == "s3"
+  assert body["options"] == {"bucket": "public", "endpoint": s3_endpoint, "region": None}
+  assert body["path"] == "L2"
+  assert body["include"] == ["*.nc"]
+  assert body["last_tested_at"] is not None
+  assert body["last_synced_at"] is None
+  assert set(body) == {"dataset_id", "backend", "options", "path", "include", "last_tested_at", "last_synced_at", "created_at", "updated_at"}
+
+  await session.refresh(dataset)
+  assert dataset.version == 2
+
+
+async def test_replace_source(client, session, s3_endpoint):
+  dataset = await add_dataset(session)
+  first = (await client.put(f"/datasets/{dataset.id}/source", json=local_s3(s3_endpoint, "public"))).json()
+  response = await client.put(f"/datasets/{dataset.id}/source", json=local_s3(s3_endpoint, "public", path="L2/2024"))
+  assert response.status_code == 200
+  body = response.json()
+  assert body["path"] == "L2/2024"
+  assert body["created_at"] == first["created_at"]
+  assert body["last_tested_at"] > first["last_tested_at"]
+
+  assert len((await session.exec(select(Source).where(Source.dataset_id == dataset.id))).all()) == 1
+  await session.refresh(dataset)
+  assert dataset.version == 3
+
+
+@pytest.mark.parametrize(
+  ("bucket", "error"),
+  [
+    (
+      "private",
+      {
+        "detail": "Access denied to bucket private. Sources are read anonymously, so the bucket must allow public reads.",
+        "code": "source_not_public",
+      },
+    ),
+    ("missing", {"detail": "Bucket missing does not exist", "code": "source_not_found"}),
+  ],
+)
+async def test_source_that_cant_be_read_is_not_saved(client, session, s3_endpoint, bucket, error):
+  dataset = await add_dataset(session)
+  response = await client.put(f"/datasets/{dataset.id}/source", json=local_s3(s3_endpoint, bucket))
+  assert response.status_code == 422
+  assert response.json() == error
+  assert await stored_source(session, dataset.id) is None
+  await session.refresh(dataset)
+  assert dataset.version == 1
+
+
+async def test_failed_test_keeps_the_current_source(client, session, s3_endpoint):
+  dataset = await add_dataset(session)
+  await client.put(f"/datasets/{dataset.id}/source", json=local_s3(s3_endpoint, "public"))
+  response = await client.put(f"/datasets/{dataset.id}/source", json=local_s3(s3_endpoint, "private"))
+  assert response.status_code == 422
+  source = await stored_source(session, dataset.id)
+  assert source is not None and source.options["bucket"] == "public"
+
+
+async def test_set_source_of_unknown_dataset(client, no_rclone):
+  response = await client.put("/datasets/999/source", json=S3_SOURCE)
+  assert response.status_code == 404
+  assert response.json() == {"detail": "Dataset 999 not found", "code": "not_found"}
+
+
+async def test_link_dataset_cant_have_a_source(client, session, no_rclone):
+  dataset = await add_dataset(session, kind=DatasetKind.link)
+  response = await client.put(f"/datasets/{dataset.id}/source", json=S3_SOURCE)
+  assert response.status_code == 422
+  assert response.json() == {"detail": f"Dataset {dataset.id} is a link dataset and can't have a source", "code": "link_dataset"}
+
+
+async def add_job(session, dataset_id, status=JobStatus.running) -> Job:
+  job = Job(type=JobType.fetch, status=status, dataset_id=dataset_id)
+  session.add(job)
+  await session.commit()
+  await session.refresh(job)
+  return job
+
+
+async def test_set_source_while_a_job_is_in_progress(client, session, no_rclone):
+  dataset = await add_dataset(session)
+  job = await add_job(session, dataset.id)
+  response = await client.put(f"/datasets/{dataset.id}/source", json=S3_SOURCE)
+  assert response.status_code == 409
+  assert response.json() == {"detail": f"Dataset {dataset.id} already has a job running (job {job.id})", "code": "job_in_progress"}
+
+
+async def test_job_queued_during_the_test_blocks_the_source(client, session, monkeypatch):
+  dataset = await add_dataset(session)
+  queued: list[Job] = []
+
+  async def probe_while_a_job_is_queued(source):
+    queued.append(await add_job(session, dataset.id, status=JobStatus.queued))
+    return SourceTestResult(ok=True, error=None, files=[], truncated=False)
+
+  monkeypatch.setattr(sources_routes, "probe_source", probe_while_a_job_is_queued)
+  response = await client.put(f"/datasets/{dataset.id}/source", json=S3_SOURCE)
+  assert response.status_code == 409
+  assert response.json()["detail"] == f"Dataset {dataset.id} already has a job queued (job {queued[0].id})"
+  assert await stored_source(session, dataset.id) is None

@@ -37,6 +37,18 @@ def job_accepted_response(type: JobType) -> dict:
   }
 
 
+async def ensure_no_active_job(session: SessionDep, dataset_id: int) -> None:
+  """Raises 409 if a fetch, sync or rebuild of the dataset is queued or running."""
+  active_job_query = (
+    select(Job)
+    .where(Job.dataset_id == dataset_id, col(Job.type).in_(EXCLUSIVE_JOB_TYPES), col(Job.status).in_([JobStatus.queued, JobStatus.running]))
+    .order_by(col(Job.id))
+    .limit(1)
+  )
+  if (active := (await session.exec(active_job_query)).first()) is not None:
+    raise ApiError(409, "job_in_progress", f"Dataset {dataset_id} already has a job {active.status} (job {active.id})")
+
+
 async def queue_dataset_job(session: SessionDep, dataset_id: int, type: JobType) -> Job:
   """
   Queues a job of an exclusive type for a dataset that has a source.
@@ -52,15 +64,7 @@ async def queue_dataset_job(session: SessionDep, dataset_id: int, type: JobType)
   if (await session.exec(select(Source.id).where(Source.dataset_id == dataset_id))).first() is None:
     raise ApiError(422, "no_source", f"Dataset {dataset_id} has no source")
 
-  active_job_query = (
-    select(Job)
-    .where(Job.dataset_id == dataset_id, col(Job.type).in_(EXCLUSIVE_JOB_TYPES), col(Job.status).in_([JobStatus.queued, JobStatus.running]))
-    .order_by(col(Job.id))
-    .limit(1)
-  )
-  if (active := (await session.exec(active_job_query)).first()) is not None:
-    raise ApiError(409, "job_in_progress", f"Dataset {dataset_id} already has a job {active.status} (job {active.id})")
-
+  await ensure_no_active_job(session, dataset_id)
   return await enqueue(session, type, dataset_id=dataset_id)
 
 

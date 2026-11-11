@@ -7,7 +7,7 @@ from app.schemas.issues import IssueBase
 from app.schemas.jobs import JobBase, JobRead, RegenerateRunBase
 from app.schemas.maintenance import CatalogueVersionBase, SyncTokenBase
 from app.schemas.sites import SiteBase, SiteRead
-from app.schemas.sources import SourceBase, SourceEntry, SourceTestResult, SourceType, SourceTypeOption
+from app.schemas.sources import SourceBase, SourceEntry, SourceRead, SourceTestResult, SourceType, SourceTypeOption
 from app.schemas.variables import VariableBase
 from app.schemas.vocabularies import (
   LicenseBase,
@@ -47,6 +47,7 @@ __all__ = [
   "SiteTypeBase",
   "SourceBase",
   "SourceEntry",
+  "SourceRead",
   "SourceTestResult",
   "SourceType",
   "SourceTypeOption",

@@ -19,6 +19,16 @@ class SourceBase(SQLModel):
   include: list[str] = Field(default_factory=list, sa_type=ARRAY(sa.String), sa_column_kwargs={"server_default": "{}"})
 
 
+class SourceRead(SourceBase):
+  """A dataset's stored source."""
+
+  dataset_id: int = Field(schema_extra={"examples": [123]})
+  last_tested_at: datetime = Field(description="When the source was last read successfully, by a test or a sync.")
+  last_synced_at: datetime | None = Field(description="When the last successful sync finished.")
+  created_at: datetime
+  updated_at: datetime
+
+
 class SourceEntry(BaseModel):
   """A file in a source."""
 
