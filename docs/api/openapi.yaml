@@ -1937,7 +1937,7 @@ paths:
       description: |
         Queues a `fetch` job and returns it. The worker then:
 
-        1. Lists the source and compares it with the file index. A file is **new** if the index doesn't have it, **changed** if its size, modified time or checksum differs, and **removed** if it's no longer in the source.
+        1. Lists the source and compares it with the file index. A file is **new** if the index doesn't have it, **changed** if its size or modified time differs, and **removed** if it's no longer in the source.
         2. Copies new and changed files into the dataset's archive, replacing the old copy of a changed file. Removed files are deleted from the archive and from the index. New and changed files are marked `new` in the index.
 
         If the listing fails, or is empty for a dataset that had files, the job fails and removes nothing.
@@ -1981,7 +1981,7 @@ paths:
       description: |
         Queues a `sync` job and returns it. It is a fetch (`POST /datasets/{dataset_id}/fetch`) followed by processing. The worker:
 
-        1. Lists the source and compares it with the file index. A file is **new** if the index doesn't have it, **changed** if its size, modified time or checksum differs, and **removed** if it's no longer in the source.
+        1. Lists the source and compares it with the file index. A file is **new** if the index doesn't have it, **changed** if its size or modified time differs, and **removed** if it's no longer in the source.
         2. Copies new and changed files into the dataset's archive, replacing the old copy of a changed file. Removed files are deleted from the archive and from the index. New and changed files are marked `new` in the index.
         3. Processes the files marked `new` into the dataset's data. A changed file replaces the data of its old version, and a removed file's data is taken out. The dataset's extents and availability are recomputed, so they can shrink. Its `version` goes up if anything changed.
 
@@ -2316,7 +2316,6 @@ paths:
                   path: 2024/L2_ThermistorChain_202409.nc
                   size: 18011342
                   modified_at: "2024-10-01T00:12:41Z"
-                  hash: 9b2f0c4e8d1a7f3b6c5e2d0a1b9c8d7e
                   time_start: "2024-09-01T00:00:00Z"
                   time_end: "2024-09-30T23:50:00Z"
                   depth_layout: 2
@@ -2327,7 +2326,6 @@ paths:
                   path: 2024/L2_ThermistorChain_202410.nc
                   size: 17388120
                   modified_at: "2024-10-30T00:00:01Z"
-                  hash: 1c7e9a2b4d6f8e0a3b5c7d9e1f2a4b6c
                   time_start: null
                   time_end: null
                   depth_layout: null
@@ -3747,7 +3745,7 @@ components:
     File:
       type: object
       description: A file in the dataset's archive, copied from its source. The archive mirrors the source, so a file that is removed from the source is removed from the archive and this index at the next sync.
-      required: [id, dataset_id, path, size, modified_at, hash, time_start, time_end, depth_layout, status, error]
+      required: [id, dataset_id, path, size, modified_at, time_start, time_end, depth_layout, status, error]
       properties:
         id:
           type: integer
@@ -3764,9 +3762,6 @@ components:
           type: string
           format: date-time
           description: When the file last changed in the source.
-        hash:
-          type: [string, "null"]
-          description: Checksum reported by the source (e.g. MD5 for S3), used to notice changes.
         time_start:
           type: [string, "null"]
           format: date-time
