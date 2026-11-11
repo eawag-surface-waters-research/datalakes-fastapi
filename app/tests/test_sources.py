@@ -1,6 +1,7 @@
 import asyncio
 import os
 import socket
+from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
 import pytest
@@ -8,7 +9,7 @@ from sqlmodel import select
 
 from app import rclone
 from app.backends import BACKENDS
-from app.enums import DatasetKind, JobStatus, JobType
+from app.enums import DatasetKind, JobStatus, JobType, SourceBackend
 from app.models import Dataset, Job, Source
 from app.routes import sources as sources_routes
 from app.schemas import SourceTestResult
@@ -380,3 +381,88 @@ async def test_job_queued_during_the_test_blocks_the_source(client, session, mon
   assert response.status_code == 409
   assert response.json()["detail"] == f"Dataset {dataset.id} already has a job queued (job {queued[0].id})"
   assert await stored_source(session, dataset.id) is None
+
+
+async def add_source(session, dataset_id) -> Source:
+  source = Source(
+    dataset_id=dataset_id,
+    backend=SourceBackend.s3,
+    options={"bucket": "eawag-lexplore"},
+    path="L2",
+    include=["*.nc"],
+    last_tested_at=datetime.now(UTC),
+  )
+  session.add(source)
+  await session.commit()
+  await session.refresh(source)
+  return source
+
+
+async def test_get_source(client, session):
+  dataset = await add_dataset(session)
+  await add_source(session, dataset.id)
+  response = await client.get(f"/datasets/{dataset.id}/source")
+  assert response.status_code == 200
+  body = response.json()
+  assert body["dataset_id"] == dataset.id
+  assert body["backend"] == "s3"
+  assert body["options"] == {"bucket": "eawag-lexplore"}
+  assert body["path"] == "L2"
+  assert body["include"] == ["*.nc"]
+  assert body["last_synced_at"] is None
+
+
+async def test_get_source_of_dataset_without_one(client, session):
+  dataset = await add_dataset(session)
+  response = await client.get(f"/datasets/{dataset.id}/source")
+  assert response.status_code == 404
+  assert response.json() == {"detail": f"Dataset {dataset.id} has no source", "code": "no_source"}
+
+
+async def test_get_source_of_link_dataset(client, session):
+  dataset = await add_dataset(session, kind=DatasetKind.link)
+  response = await client.get(f"/datasets/{dataset.id}/source")
+  assert response.status_code == 404
+  assert response.json()["code"] == "no_source"
+
+
+async def test_get_source_of_unknown_dataset(client):
+  response = await client.get("/datasets/999/source")
+  assert response.status_code == 404
+  assert response.json() == {"detail": "Dataset 999 not found", "code": "not_found"}
+
+
+async def test_delete_source(client, session):
+  dataset = await add_dataset(session)
+  await add_source(session, dataset.id)
+  ended = await add_job(session, dataset.id, status=JobStatus.succeeded)  # jobs that ended don't block it, and are kept
+  response = await client.delete(f"/datasets/{dataset.id}/source")
+  assert response.status_code == 204
+  assert response.content == b""
+  assert await stored_source(session, dataset.id) is None
+  await session.refresh(dataset)
+  assert dataset.version == 2
+  assert await session.get(Job, ended.id) is not None
+
+  # it's gone, so a second delete is a 404
+  response = await client.delete(f"/datasets/{dataset.id}/source")
+  assert response.status_code == 404
+  assert response.json()["code"] == "no_source"
+
+
+async def test_delete_source_of_unknown_dataset(client):
+  response = await client.delete("/datasets/999/source")
+  assert response.status_code == 404
+  assert response.json() == {"detail": "Dataset 999 not found", "code": "not_found"}
+
+
+async def test_delete_source_while_a_job_is_in_progress(client, session):
+  dataset = await add_dataset(session)
+  await add_source(session, dataset.id)
+  job = await add_job(session, dataset.id, status=JobStatus.queued)
+  response = await client.delete(f"/datasets/{dataset.id}/source")
+  assert response.status_code == 409
+  assert response.json() == {"detail": f"Dataset {dataset.id} already has a job queued (job {job.id})", "code": "job_in_progress"}
+  assert await stored_source(session, dataset.id) is not None
+  await session.refresh(dataset)
+  assert dataset.version == 1

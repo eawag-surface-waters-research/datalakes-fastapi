@@ -162,6 +162,51 @@ SOURCE_READ_EXAMPLE = {
 }
 
 
+NO_SOURCE_RESPONSE = {
+  404: {
+    "model": ErrorResponse,
+    "description": "The dataset doesn't exist, or has no source.",
+    "content": {
+      "application/json": {
+        "examples": {
+          "no_dataset": {"summary": "The dataset doesn't exist", "value": {"detail": "Dataset 999 not found", "code": "not_found"}},
+          "no_source": {"summary": "The dataset has no source", "value": {"detail": "Dataset 512 has no source", "code": "no_source"}},
+        }
+      }
+    },
+  }
+}
+
+
+async def get_stored_source(session: SessionDep, dataset_id: int, *, lock_dataset: bool = False) -> tuple[Dataset, Source]:
+  dataset = await session.get(Dataset, dataset_id, with_for_update=lock_dataset)
+  if dataset is None:
+    raise not_found("Dataset", dataset_id)
+  source = (await session.exec(select(Source).where(Source.dataset_id == dataset_id))).first()
+  if source is None:
+    raise ApiError(404, "no_source", f"Dataset {dataset_id} has no source")
+  return dataset, source
+
+
+@router.get(
+  "/datasets/{dataset_id}/source",
+  response_model=SourceRead,
+  summary="Get a dataset's source",
+  responses={200: {"content": {"application/json": {"example": SOURCE_READ_EXAMPLE}}}, **NO_SOURCE_RESPONSE},
+)
+async def get_source(dataset_id: int, session: SessionDep):
+  """
+  Returns where the dataset's files come from.
+
+  - **Drafts** have sources like any other dataset.
+  - **Link datasets** never have a source (404).
+
+  **Access:** public.
+  """
+  _, source = await get_stored_source(session, dataset_id)
+  return source
+
+
 @router.put(
   "/datasets/{dataset_id}/source",
   response_model=SourceRead,
@@ -260,3 +305,29 @@ async def set_source(
   await session.commit()
   await session.refresh(stored)
   return stored
+
+
+@router.delete(
+  "/datasets/{dataset_id}/source",
+  status_code=204,
+  summary="Remove a dataset's source",
+  responses={204: {"description": "The source was removed."}, **NO_SOURCE_RESPONSE, **CONFLICT_RESPONSE},
+)
+async def delete_source(dataset_id: int, session: SessionDep):
+  """
+  Removes the source. The files already fetched and the data built from them are kept, and the dataset just stops syncing.
+  Increases the dataset's `version`.
+
+  The source can't be removed while a fetch, sync or rebuild of the dataset is queued or running (409).
+
+  **Access:** user (own datasets) or owner.
+  """
+  # Locking the dataset, so a job can't be queued between the check and the commit
+  dataset, source = await get_stored_source(session, dataset_id, lock_dataset=True)
+
+  await ensure_no_active_job(session, dataset_id)
+  await session.delete(source)
+
+  dataset.version += 1
+  session.add(dataset)
+  await session.commit()
