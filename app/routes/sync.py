@@ -4,9 +4,10 @@ from sqlmodel import col, select
 from app.database import SessionDep
 from app.enums import DatasetKind, JobStatus, JobType
 from app.errors import ApiError, ErrorResponse, not_found
-from app.models import Dataset, Job, Source
+from app.models import Dataset, File, Job, Source
 from app.routes.jobs import QUEUED_JOB_EXAMPLE
-from app.schemas import JobRead
+from app.schemas import InspectRequest, JobRead
+from app.storage import raw_dir
 from app.worker.queue import enqueue
 
 router = APIRouter(prefix="/datasets", tags=["Sync"])
@@ -49,6 +50,22 @@ async def ensure_no_active_job(session: SessionDep, dataset_id: int) -> None:
     raise ApiError(409, "job_in_progress", f"Dataset {dataset_id} already has a job {active.status} (job {active.id})")
 
 
+async def get_dataset_with_source(session: SessionDep, dataset_id: int, verb: str, lock: bool = False) -> Dataset:
+  """
+  The dataset, if it has a source. Raises 404 for an unknown dataset, and 422 for a link dataset or a dataset without a source.
+  """
+  dataset = await session.get(Dataset, dataset_id, with_for_update=lock)
+
+  if dataset is None:
+    raise not_found("Dataset", dataset_id)
+  if dataset.kind == DatasetKind.link:
+    raise ApiError(422, "link_dataset", f"Dataset {dataset_id} is a link dataset and can't be {verb}")
+  if (await session.exec(select(Source.id).where(Source.dataset_id == dataset_id))).first() is None:
+    raise ApiError(422, "no_source", f"Dataset {dataset_id} has no source")
+
+  return dataset
+
+
 async def queue_dataset_job(session: SessionDep, dataset_id: int, type: JobType) -> Job:
   """
   Queues a job of an exclusive type for a dataset that has a source.
@@ -56,14 +73,7 @@ async def queue_dataset_job(session: SessionDep, dataset_id: int, type: JobType)
   """
   # Locking the dataset row makes concurrent requests for the same dataset wait here, so only one of them queues a job.
   # The lock is released by the commit in `enqueue`, or by the rollback when an error is raised.
-  dataset = await session.get(Dataset, dataset_id, with_for_update=True)
-  if dataset is None:
-    raise not_found("Dataset", dataset_id)
-  if dataset.kind == DatasetKind.link:
-    raise ApiError(422, "link_dataset", f"Dataset {dataset_id} is a link dataset and can't be {VERBS[type]}")
-  if (await session.exec(select(Source.id).where(Source.dataset_id == dataset_id))).first() is None:
-    raise ApiError(422, "no_source", f"Dataset {dataset_id} has no source")
-
+  await get_dataset_with_source(session, dataset_id, VERBS[type], lock=True)
   await ensure_no_active_job(session, dataset_id)
   return await enqueue(session, type, dataset_id=dataset_id)
 
@@ -113,3 +123,72 @@ async def fetch_dataset(dataset_id: int, session: SessionDep):
   **Access:** user (own datasets) or owner.
   """
   return await queue_dataset_job(session, dataset_id, JobType.fetch)
+
+
+INSPECTED_FILE_EXAMPLE = "2024/L2_ThermistorChain_202406.nc"
+
+
+@router.post(
+  "/{dataset_id}/inspect",
+  summary="Suggest variables from a sample file",
+  responses={
+    **NOT_FOUND_RESPONSE,
+    **CONFLICT_RESPONSE,
+    422: {
+      "model": ErrorResponse,
+      "description": "The dataset has no source, the file isn't in its archive, or it can't be read.",
+      "content": {
+        "application/json": {
+          "examples": {
+            "no_source": {"summary": "The dataset has no source", "value": {"detail": "Dataset 512 has no source", "code": "no_source"}},
+            "link_dataset": {
+              "summary": "The dataset is a link dataset",
+              "value": {"detail": "Dataset 2 is a link dataset and can't be inspected", "code": "link_dataset"},
+            },
+            "file_not_in_archive": {
+              "summary": "The file isn't in the archive",
+              "value": {
+                "detail": f"File '{INSPECTED_FILE_EXAMPLE}' is not in the archive of dataset 512. Fetch the dataset first.",
+                "code": "file_not_in_archive",
+              },
+            },
+            "unreadable_file": {
+              "summary": "The file can't be read",
+              "value": {"detail": "File 'README.md' is not a NetCDF file (.nc). Only NetCDF is supported.", "code": "unreadable_file"},
+            },
+          }
+        }
+      },
+    },
+    501: {
+      "model": ErrorResponse,
+      "description": "Reading the file isn't implemented yet. The checks above already apply.",
+      "content": {"application/json": {"example": {"detail": "Inspecting files is not implemented yet", "code": "not_implemented"}}},
+    },
+  },
+)
+async def inspect_file(dataset_id: int, request: InspectRequest, session: SessionDep):
+  """
+  Reads one file from the dataset's archive and suggests the dataset's variables and feature type, in the response.
+  Fetch the dataset first, so that the file is in the archive, and pick it from `GET /datasets/{dataset_id}/files`.
+
+  The suggestions are not saved. Review them, then create the variables.
+
+  While a fetch, sync or rebuild of the dataset is queued or running, this returns 409 with the job's ID, as the job may change the archive.
+
+  - **Drafts:** inspect works as usual, and is meant for setting up a new dataset.
+  - **Link datasets** have no source (422).
+
+  **Access:** user (own datasets) or owner.
+  """
+  await get_dataset_with_source(session, dataset_id, "inspected")
+  await ensure_no_active_job(session, dataset_id)
+
+  # check if the file is in the index before trying to read it
+  indexed = (await session.exec(select(File.id).where(File.dataset_id == dataset_id, File.path == request.file))).first()
+  if indexed is None or not (raw_dir(dataset_id) / request.file).is_file():
+    raise ApiError(422, "file_not_in_archive", f"File {request.file!r} is not in the archive of dataset {dataset_id}. Fetch the dataset first.")
+  if not request.file.lower().endswith(".nc"):
+    raise ApiError(422, "unreadable_file", f"File {request.file!r} is not a NetCDF file (.nc). Only NetCDF is supported.")
+
+  raise ApiError(501, "not_implemented", "Inspecting files is not implemented yet")

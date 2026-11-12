@@ -3,6 +3,7 @@ from app.schemas.coverage import CoverageBase
 from app.schemas.datasets import DatasetBase, DatasetCreate, DatasetRead, DatasetUpdate
 from app.schemas.exports import ExportBase
 from app.schemas.files import FileBase, FileRead
+from app.schemas.inspect import InspectRequest
 from app.schemas.issues import IssueBase
 from app.schemas.jobs import JobBase, JobRead, RegenerateRunBase
 from app.schemas.maintenance import CatalogueVersionBase, SyncTokenBase
@@ -32,6 +33,7 @@ __all__ = [
   "ExportBase",
   "FileBase",
   "FileRead",
+  "InspectRequest",
   "IssueBase",
   "JobBase",
   "JobRead",

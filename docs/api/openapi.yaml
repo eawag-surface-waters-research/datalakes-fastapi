@@ -1868,6 +1868,8 @@ paths:
 
         The suggestions are not saved. Review them, then create the variables with `POST /datasets/{dataset_id}/variables`.
 
+        While a fetch, sync or rebuild of the dataset is queued or running, this returns 409 with the job's ID, as the job may change the archive.
+
         - **Drafts:** inspect works as usual, and is meant for setting up a new dataset.
         - **Link datasets** have no source (422).
 
@@ -1892,6 +1894,8 @@ paths:
                   $ref: "#/components/examples/InspectedFile"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "422":
           description: The dataset has no source, the file isn't in its archive, or it can't be read.
           content:
