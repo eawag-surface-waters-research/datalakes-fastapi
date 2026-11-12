@@ -501,8 +501,7 @@ paths:
                       flag_for: null
                       legacy_axis: x
                       description: null
-                      decoding:
-                        time_units: seconds since 1970-01-01 00:00:00
+                      decoding: null
                       parameter:
                         id: 1
                         name: Time
@@ -635,15 +634,13 @@ paths:
                   decoding:
                     missing_values: [-9999]
               time:
-                summary: A time coordinate stored as unix seconds without CF units
+                summary: A time coordinate, decoded from the CF units in the file
                 value:
                   name: time
                   source_name: time
                   role: time
                   dimensions: [time]
                   parameter_id: 1
-                  decoding:
-                    time_units: seconds since 1970-01-01 00:00:00
       responses:
         "201":
           description: The variable was added.
@@ -1987,7 +1984,9 @@ paths:
 
         **The dataset needs variables first** (422 `no_variables`). To set up a new dataset, use `fetch`, `inspect`, create the variables and `rebuild` instead.
 
-        A file that can't be processed is marked `failed` in the file index with its error. The other files are still processed, and the job ends as `failed` so the problem is noticed.
+        **File checks.** Before a file is processed, it's checked against the dataset's variables. It must be NetCDF (`.nc`), contain every variable's `source_name` with the declared dimensions and, where the variable has a `unit`, the same `units`. Time must have CF units, e.g. `seconds since 1970-01-01 00:00:00`. Variables the dataset doesn't use are fine: they're named in a warning in the log.
+
+        A file that fails the checks, or can't be processed, is marked `failed` in the file index with every problem found. The other files are still processed, and the job ends as `failed` so the problem is noticed. A file in another format is marked `ignored` and doesn't fail the job. This applies once the dataset has been built: before that, see `rebuild`.
 
         **External callers**, such as a processing pipeline, call this endpoint after uploading new data to the source. Some datasets update every 20 minutes, so a sync with nothing new is cheap. External callers use the dataset's sync token.
 
@@ -2038,6 +2037,8 @@ paths:
         Queues a `rebuild` job that throws away the dataset's Zarr stores and builds it again from scratch, from all the files in the archive. Use it to build a new dataset's data once its variables exist, and when something is corrupted or went wrong in an unexpected way. A normal sync only processes new and changed files. To fetch the files again first, call `POST /datasets/{dataset_id}/fetch`.
 
         The new stores are written next to the current ones. Requests keep being answered from the current data until the new data is complete, and then one switch replaces it and increases the dataset's `version`. If the rebuild fails, the current data stays as it was.
+
+        **The first build is strict.** Every file is checked against the dataset's variables, as described under `sync`. Until a dataset has been built once, all archived files are checked before anything is written, and one failing file, or one file that isn't NetCDF, fails the whole build. The job then lists every failing file with every problem, and the file index has them as `failed`, so everything can be fixed at once. Fix the files (or leave stray ones out with the source's `include` patterns) or the variables, fetch, and rebuild again. Once the dataset has been built, a rebuild skips failing files and ignores other formats like a sync.
 
         - **Drafts** are rebuilt as usual.
         - **Link datasets** have no data to rebuild (422).
@@ -2189,8 +2190,8 @@ paths:
                   type: sync
                   status: failed
                   progress: 1
-                  error: "1 of 3 new files failed: L2_ThermistorChain_202410.nc: variable 'temp' not found"
-                  log: "Copied 3 files (52.1 MB)\nProcessing L2_ThermistorChain_202410.nc failed: variable 'temp' not found"
+                  error: "1 of 3 new files failed: 2024/L2_ThermistorChain_202410.nc: variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
+                  log: "Copied 3 files (52.1 MB)\n2024/L2_ThermistorChain_202410.nc failed: variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
                   result:
                     files_new: 3
                     files_changed: 0
@@ -2200,7 +2201,8 @@ paths:
                     files_processed: 2
                     files_failed:
                       - path: 2024/L2_ThermistorChain_202410.nc
-                        error: "variable 'temp' not found"
+                        codes: [missing_variable]
+                        error: "variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
                   created_at: "2024-10-30T00:00:02Z"
                   started_at: "2024-10-30T00:00:03Z"
                   finished_at: "2024-10-30T00:05:31Z"
@@ -2330,7 +2332,7 @@ paths:
                   time_end: null
                   depth_layout: null
                   status: failed
-                  error: "variable 'temp' not found"
+                  error: "variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
         "400":
           $ref: "#/components/responses/BadRequest"
         "404":
@@ -3115,7 +3117,7 @@ paths:
                 failures:
                   - dataset_id: 288
                     job_id: 6120
-                    error: "2 of 41 files failed: variable 'temp' not found"
+                    error: "2 of 41 files have no variable 'temp' (source of 'temperature')"
                   - dataset_id: 301
                     job_id: 6131
                     error: Source archive is empty
@@ -3361,15 +3363,23 @@ components:
           description: New and changed files added to the dataset's data. Removed files' data taken out isn't counted here.
         files_failed:
           type: array
-          description: Files that couldn't be processed. They're marked `failed` in the file index.
+          description: Files that didn't pass the file checks or couldn't be processed. They're marked `failed` in the file index.
           items:
             type: object
-            required: [path, error]
+            required: [path, codes, error]
             properties:
               path:
                 type: string
+              codes:
+                type: array
+                description: One code per problem found in the file.
+                items:
+                  type: string
+                  enum: [unsupported_format, unreadable_file, missing_variable, wrong_dimensions, unit_mismatch, invalid_time_units]
+                examples: [[missing_variable]]
               error:
                 type: string
+                description: Every problem found in the file, each naming the variable, what was expected and what was found.
 
     # -------------------------------------------------------------------------
     # Sources
@@ -3739,8 +3749,9 @@ components:
       description: |
         - `new`: copied from the source (new or changed there), not processed yet.
         - `ok`: processed into the dataset's data.
-        - `failed`: couldn't be processed, as explained in `error`. It's tried again when the file changes in the source.
-      enum: [new, ok, failed]
+        - `failed`: didn't pass the file checks or couldn't be processed, as explained in `error`. It's tried again when the file changes in the source.
+        - `ignored`: not in a supported format (only NetCDF, `.nc`), in a dataset that has been built before. It's skipped without failing the job. In a new dataset, such a file is `failed` instead and stops the first build. Use the source's `include` patterns to leave such files out.
+      enum: [new, ok, failed, ignored]
 
     File:
       type: object
@@ -3780,7 +3791,7 @@ components:
           $ref: "#/components/schemas/FileStatus"
         error:
           type: [string, "null"]
-          description: Why processing failed, or `null`.
+          description: Why the file failed, with every problem found, each naming the variable, what was expected and what was found. Or why it was ignored. `null` otherwise.
 
     FileList:
       type: array
@@ -4140,12 +4151,11 @@ components:
 
     Decoding:
       type: object
-      description: How to read values that the file doesn't describe in a standard way. Suggested by inspect.
+      description: |
+        How to read values that the file doesn't describe in a standard way. Suggested by inspect.
+
+        Time can't be decoded here: a time variable must have CF units in the file, e.g. `seconds since 1970-01-01 00:00:00`. A file without them fails with `invalid_time_units`.
       properties:
-        time_units:
-          type: string
-          description: For time variables without CF units. CF-style units such as `seconds since 1970-01-01 00:00:00`, or `matlab_datenum`.
-          examples: [seconds since 1970-01-01 00:00:00]
         missing_values:
           type: array
           description: Values that mean "no data", on top of the file's own fill value.
@@ -5696,8 +5706,7 @@ components:
             flag_for: null
             legacy_axis: x
             description: null
-            decoding:
-              time_units: seconds since 1970-01-01 00:00:00
+            decoding: null
           - id: 902
             dataset_id: 123
             name: depth
@@ -6015,8 +6024,8 @@ components:
         type: sync
         status: failed
         progress: 1
-        error: "1 of 3 new files failed: L2_ThermistorChain_202410.nc: variable 'temp' not found"
-        log: "Copied 3 files (52.1 MB)\nProcessed 2024/L2_ThermistorChain_202408.nc\nProcessed 2024/L2_ThermistorChain_202409.nc\nProcessing 2024/L2_ThermistorChain_202410.nc failed: variable 'temp' not found"
+        error: "1 of 3 new files failed: 2024/L2_ThermistorChain_202410.nc: variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
+        log: "Copied 3 files (52.1 MB)\nProcessed 2024/L2_ThermistorChain_202408.nc\nProcessed 2024/L2_ThermistorChain_202409.nc\n2024/L2_ThermistorChain_202410.nc failed: variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
         result:
           files_new: 3
           files_changed: 0
@@ -6026,7 +6035,8 @@ components:
           files_processed: 2
           files_failed:
             - path: 2024/L2_ThermistorChain_202410.nc
-              error: "variable 'temp' not found"
+              codes: [missing_variable]
+              error: "variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
         created_at: "2024-10-30T00:00:02Z"
         started_at: "2024-10-30T00:00:03Z"
         finished_at: "2024-10-30T00:05:31Z"
@@ -6044,8 +6054,6 @@ components:
             dimensions: [time]
             unit: null
             parameter_id: 1
-            decoding:
-              time_units: seconds since 1970-01-01 00:00:00
             shape: [4320]
             attributes:
               long_name: time
@@ -6091,7 +6099,7 @@ components:
           latitude: 46.5004
           longitude: 6.6588
         warnings:
-          - "time has no units attribute. Its values (1717200000 to 1719791400) look like seconds since 1970, i.e. June 2024: check time_units."
+          - "time has no units attribute, so files like this one fail to build with invalid_time_units. Its values (1717200000 to 1719791400) look like seconds since 1970, i.e. June 2024: add units = 'seconds since 1970-01-01 00:00:00' to the time variable in the files."
           - "temp contains -9999, which looks like a missing value: added to missing_values."
           - The file has no latitude or longitude variable, so the location comes from the global attributes.
 

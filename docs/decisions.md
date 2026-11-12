@@ -24,6 +24,7 @@ Each entry has a status:
 | 12  | [Old iframe links keep working through `legacy_axis`](#12-old-iframe-links-keep-working-through-legacy_axis) | Decided |
 | 13  | [Referenced objects are expanded by default](#13-referenced-objects-are-expanded-by-default)              | Decided |
 | 14  | [Two API docs: public and admin](#14-two-api-docs-public-and-admin)                                      | Decided |
+| 15  | [Strict checks on input files](#15-strict-checks-on-input-files)                                         | Decided |
 
 ---
 
@@ -203,3 +204,20 @@ Decided on 2026-11-12.
 - An endpoint only goes into the public spec when its route has a special marker tag. Everything else is only in the full spec.
 - The public spec is served at FastAPI's default `/docs`, `/redoc` and `/openapi.json`. The full spec is at `/admin/docs`, `/admin/redoc` and `/admin/openapi.json`.
 - The marker tag is removed from both specs, so it isn't rendered.
+
+## 15. Strict checks on input files
+
+Decided on 2026-11-12.
+
+**Question:** The old system hardly checks its input files. It reads one file when a dataset is set up and converts every later file with the same mapping without comparing it. A missing variable becomes empty data and units are never compared. Time is guessed from the first value (MATLAB datenum or unix seconds), and a failed conversion is only logged on the server. How strict should the new system be and what happens when a file doesn't pass?
+
+**Answer:** Strict. The dataset's variables are the schema that every file must match and time must have CF units. A new dataset must pass completely, but an operational dataset keeps running when a bad or stray file appears. Every problem is reported per file with a message that says what to fix.
+
+**What this means:**
+
+- Every file is checked against the dataset's variables before it's processed. It must contain every variable's `source_name`, with the declared dimensions. Where the variable has a `unit`, the file's `units` attribute must match it.
+- Time variables must have CF units, e.g. `seconds since 1970-01-01 00:00:00`. The old guessing isn't carried over. Datasets whose files have no CF time units must have their files fixed before the migration.
+- Variables in a file that the dataset doesn't use are allowed. They're listed as a warning in the job log, but the file is still processed.
+- Only NetCDF files (`.nc`) are supported. Other formats should trigger an error for new datasets and be silently ignored for updates.
+- New datasets are strict: Until a dataset's first successful build, every file must pass. The build checks all files before writing anything. If any file fails, nothing is built, and the job lists every problem per file. A file in an unsupported format is an error.
+- Built datasets keep running: After the first successful build, a file that fails in a sync or rebuild is skipped and marked `failed` with its error. The other files are still processed and the job ends as `failed`. A file in an unsupported format is marked `ignored` and doesn't fail the job.
