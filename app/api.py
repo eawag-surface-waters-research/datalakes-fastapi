@@ -14,7 +14,7 @@ from app.database import DATABASE_URL, check_db_connection, engine, get_safe_db_
 from app.errors import add_exception_handlers
 from app.observability import setup_observability
 from app.openapi import ADMIN_DOCS_URL, setup_openapi
-from app.routes import datasets, jobs, sources, sync
+from app.routes import datasets, files, jobs, sources, sync
 
 setup_observability()
 logger = logging.getLogger(__name__)
@@ -97,6 +97,7 @@ app.include_router(datasets.router)
 app.include_router(sources.router)
 app.include_router(sync.router)
 app.include_router(jobs.router)
+app.include_router(files.router)
 
 setup_openapi(app)  # after the routers, so both specs see every route
 
