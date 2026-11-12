@@ -7,11 +7,11 @@ from sqlmodel import col, select
 from app.database import SessionDep
 from app.enums import JobStatus, JobType
 from app.errors import ApiError, ErrorResponse, not_found
-from app.models import Job
+from app.models import Dataset, Job
 from app.schemas import JobRead
 from app.worker.queue import append_log
 
-router = APIRouter(prefix="/jobs", tags=["Jobs"])
+router = APIRouter(tags=["Jobs"])
 
 StatusFilter = Annotated[JobStatus | None, Query(description="Only jobs with this status.", examples=["failed"])]
 TypeFilter = Annotated[JobType | None, Query(description="Only jobs of this type.", examples=["sync"])]
@@ -54,15 +54,26 @@ FAILED_JOB_EXAMPLE = {
 }
 
 
+async def find_jobs(session: SessionDep, *, dataset_id: int | None = None, status: JobStatus | None = None, type: JobType | None = None) -> list[Job]:
+  query = select(Job)
+  if dataset_id is not None:
+    query = query.where(Job.dataset_id == dataset_id)
+  if status:
+    query = query.where(Job.status == status)
+  if type:
+    query = query.where(Job.type == type)
+  return list((await session.exec(query.order_by(col(Job.created_at).desc(), col(Job.id).desc()))).all())
+
+
 @router.get(
-  "",
+  "/jobs",
   response_model=list[JobRead],
   summary="List all jobs",
   responses={200: {"content": {"application/json": {"example": [FAILED_JOB_EXAMPLE]}}}},
 )
 async def list_jobs(session: SessionDep, status: StatusFilter = None, type: TypeFilter = None):
   """
-  Lists the jobs of all datasets, newest first, e.g. to see what's queued or what failed overnight.
+  Lists the jobs of all datasets, newest first.
 
   Job types:
   - `fetch`: copy new and changed files from the source and drop removed ones. Nothing is processed.
@@ -72,16 +83,31 @@ async def list_jobs(session: SessionDep, status: StatusFilter = None, type: Type
 
   **Access:** owner.
   """
-  query = select(Job)
-  if status:
-    query = query.where(Job.status == status)
-  if type:
-    query = query.where(Job.type == type)
-  return (await session.exec(query.order_by(col(Job.created_at).desc(), col(Job.id).desc()))).all()
+  return await find_jobs(session, status=status, type=type)
 
 
 @router.get(
-  "/{job_id}",
+  "/datasets/{dataset_id}/jobs",
+  response_model=list[JobRead],
+  summary="List a dataset's jobs",
+  responses={
+    200: {"content": {"application/json": {"example": [QUEUED_JOB_EXAMPLE, FAILED_JOB_EXAMPLE]}}},
+    404: {"model": ErrorResponse, "description": "The dataset doesn't exist."},
+  },
+)
+async def list_dataset_jobs(dataset_id: int, session: SessionDep, status: StatusFilter = None, type: TypeFilter = None):
+  """
+  Lists the jobs of one dataset, newest first.
+
+  **Access:** public.
+  """
+  if await session.get(Dataset, dataset_id) is None:
+    raise not_found("Dataset", dataset_id)
+  return await find_jobs(session, dataset_id=dataset_id, status=status, type=type)
+
+
+@router.get(
+  "/jobs/{job_id}",
   response_model=JobRead,
   summary="Get a job",
   responses={
@@ -114,7 +140,7 @@ async def get_job(job_id: int, session: SessionDep):
 
 
 @router.post(
-  "/{job_id}/cancel",
+  "/jobs/{job_id}/cancel",
   response_model=JobRead,
   summary="Cancel a job",
   responses={
