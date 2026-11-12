@@ -98,8 +98,8 @@ async def fetch_dataset(dataset_id: int, session: SessionDep):
   """
   Queues a `fetch` job and returns it. The worker then:
 
-  1. Lists the source and compares it with the file index. A file is **new** if the index doesn't have it, **changed** if its size,
-     modified time or checksum differs, and **removed** if it's no longer in the source.
+  1. Lists the source and compares it with the file index. A file is **new** if the index doesn't have it, **changed** if its size
+     or modified time differs or it's missing from the archive, and **removed** if it's no longer in the source.
   2. Copies new and changed files into the dataset's archive, replacing the old copy of a changed file. Removed files are deleted from
      the archive and from the index. New and changed files are marked `new` in the index.
 

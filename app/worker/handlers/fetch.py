@@ -23,7 +23,9 @@ PROGRESS_INTERVAL = 1.0  # min. seconds between progress updates while copying
 
 class FetchResult(BaseModel):
   files_new: int = Field(description="Files that weren't in the archive, copied")
-  files_changed: int = Field(description="Files whose size or modification time changed in the source, copied again")
+  files_changed: int = Field(
+    description="Files whose size or modification time changed in the source, or that were missing from the archive, copied again"
+  )
   files_removed: int = Field(description="Files no longer in the source, deleted from the archive")
   files_unchanged: int = Field(description="Files already in the archive as they are in the source")
   bytes_copied: int
@@ -34,18 +36,22 @@ class Changes:
   """How the source differs from the file index."""
 
   new: list[SourceEntry]
-  changed: list[SourceEntry]
+  changed: list[SourceEntry]  # includes the missing ones
   removed: list[str]
   unchanged: int
+  missing: int  # indexed and unchanged in the source, but not in the archive
 
   @property
   def to_upsert(self) -> list[SourceEntry]:
     return self.new + self.changed
 
 
-def compare(listing: list[SourceEntry], indexed: dict[str, File]) -> Changes:
-  """Compares the source's files with the index by path, size and modification time."""
-  new, changed, unchanged = [], [], 0
+def compare(listing: list[SourceEntry], indexed: dict[str, File], archive: Path) -> Changes:
+  """
+  Compares the source's files with the index by path, size and modification time.
+  An indexed file that's missing from the archive counts as changed, so it's copied again.
+  """
+  new, changed, unchanged, missing = [], [], 0, 0
 
   for entry in listing:
     file = indexed.get(entry.path)
@@ -55,13 +61,17 @@ def compare(listing: list[SourceEntry], indexed: dict[str, File]) -> Changes:
     elif file.size != entry.size or file.modified_at != (entry.modified_at or DEFAULT_MODIFICATION_TIME):
       # a file is in the index but its size or modification time changed, so it's changed
       changed.append(entry)
+    elif not (archive / entry.path).is_file():
+      # a file is in the index and unchanged in the source, but missing from the archive, so it's copied again
+      changed.append(entry)
+      missing += 1
     else:
-      # a file is in the index and its size and modification time are the same, so it's unchanged
+      # a file is in the index, its size and modification time are the same, and it's in the archive, so it's unchanged
       unchanged += 1
 
   listed = {entry.path for entry in listing}
   removed = sorted(path for path in indexed if path not in listed)
-  return Changes(new=new, changed=changed, removed=removed, unchanged=unchanged)
+  return Changes(new=new, changed=changed, removed=removed, unchanged=unchanged, missing=missing)
 
 
 def delete_from_archive(archive: Path, paths: list[str]) -> None:
@@ -78,7 +88,7 @@ def delete_from_archive(archive: Path, paths: list[str]) -> None:
 class FetchHandler(Handler[NoParams]):
   """
   Makes a dataset's archive match its source: copies new and changed files into `raw/{dataset_id}/`, deletes removed ones, and updates the file index.
-  A file is changed when its size or modification time differs from the index.
+  A file is changed when its size or modification time differs from the index, or when it's indexed but missing from the archive.
 
   If the source can't be listed, or has no files while the archive has some, the job fails and nothing is removed.
   """
@@ -112,13 +122,15 @@ class FetchHandler(Handler[NoParams]):
         f"The source has no files, but the archive has {len(indexed)} files. This usually means the source moved or was emptied by mistake, so nothing was removed."
       )
 
-    changes = compare(listing, indexed)
+    archive_path = raw_dir(dataset_id)
+    changes = compare(listing, indexed, archive_path)
     await context.log(
       f"{len(changes.new)} new, {len(changes.changed)} changed, {len(changes.removed)} removed and {changes.unchanged} unchanged files"
     )
+    if changes.missing:
+      await context.log(f"{changes.missing} of the changed files were missing from the archive, they're copied again")
     await context.progress(0.05)
 
-    archive_path = raw_dir(dataset_id)
     bytes_copied = await self._copy(context, source, changes.to_upsert, archive_path)
     await self._update_index(context, dataset_id, changes)
     delete_from_archive(archive_path, changes.removed)  # after the index, so the index never lists a file that isn't in the archive

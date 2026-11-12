@@ -4,6 +4,7 @@ Each test writes its files to its own folder in the `public` bucket, which anony
 """
 
 import os
+import shutil
 import subprocess
 import uuid
 from datetime import UTC, datetime
@@ -169,6 +170,44 @@ async def test_changed_file_is_copied_again(worker_engine, make_worker, bucket, 
   assert file.status == FileStatus.new  # to be processed again
   assert file.error is None
   assert file.time_start == T0  # kept until the build reads the new file, so it knows which data the file replaces
+
+
+async def test_file_missing_from_archive_is_copied_again(worker_engine, make_worker, bucket, filesystem):
+  bucket.put("a.nc", "a")
+  bucket.put("L2/b.nc", "bb")
+  dataset_id = await add_dataset(worker_engine, bucket)
+  await fetch(worker_engine, make_worker, dataset_id)
+
+  # as if a build had processed the file
+  async with AsyncSession(worker_engine) as session:
+    file = (await session.exec(select(File).where(File.path == "L2/b.nc"))).one()
+    file.status, file.time_start, file.time_end = FileStatus.ok, T0, T0
+    session.add(file)
+    await session.commit()
+
+  (filesystem / "raw" / str(dataset_id) / "L2" / "b.nc").unlink()
+  job = await fetch(worker_engine, make_worker, dataset_id)
+  assert job.status == JobStatus.succeeded, job.error
+  assert job.result == result(files_changed=1, files_unchanged=1, bytes_copied=2)
+  assert "1 of the changed files were missing from the archive" in (job.log or "")
+  assert archive(filesystem, dataset_id) == {"a.nc": "a", "L2/b.nc": "bb"}
+
+  file = (await index(worker_engine, dataset_id))["L2/b.nc"]
+  assert file.status == FileStatus.new  # to be processed again
+  assert file.time_start == T0
+
+
+async def test_deleted_archive_is_copied_again(worker_engine, make_worker, bucket, filesystem):
+  bucket.put("a.nc", "a")
+  bucket.put("L2/b.nc", "bb")
+  dataset_id = await add_dataset(worker_engine, bucket)
+  await fetch(worker_engine, make_worker, dataset_id)
+
+  shutil.rmtree(filesystem / "raw" / str(dataset_id))
+  job = await fetch(worker_engine, make_worker, dataset_id)
+  assert job.status == JobStatus.succeeded, job.error
+  assert job.result == result(files_changed=2, bytes_copied=3)
+  assert archive(filesystem, dataset_id) == {"a.nc": "a", "L2/b.nc": "bb"}
 
 
 async def test_removed_file_is_deleted(worker_engine, make_worker, bucket, filesystem):
