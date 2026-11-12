@@ -2,13 +2,23 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "FastAPI: debug API",
+      "name": "Debug API",
       "type": "debugpy",
       "request": "launch",
       "module": "app.main",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "justMyCode": true
+    },
+    {
+      "name": "Debug worker",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "app.main",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "args": ["--worker"]
     }
   ]
 }

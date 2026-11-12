@@ -1,8 +1,6 @@
 import asyncio
-import os
 import socket
 from datetime import UTC, datetime
-from urllib.parse import urlsplit
 
 import pytest
 from sqlmodel import select
@@ -138,21 +136,6 @@ async def test_unknown_backend_is_rejected(client, no_rclone):
   response = await client.post("/sources/test", json={"backend": "gdrive", "options": {}})
   assert response.status_code == 422
   assert response.json()["code"] == "validation_error"
-
-
-TEST_S3_ENDPOINT = os.getenv("TEST_S3_ENDPOINT", "http://localhost:8333")
-
-
-@pytest.fixture
-def s3_endpoint(monkeypatch) -> str:
-  """The local test S3 server. It's in a private network, so private endpoints are allowed for these tests."""
-  url = urlsplit(TEST_S3_ENDPOINT)
-  try:
-    socket.create_connection((url.hostname, url.port), timeout=1).close()
-  except OSError:
-    pytest.skip(f"The test S3 server isn't running at {TEST_S3_ENDPOINT}")
-  monkeypatch.setenv("SOURCE_ALLOW_PRIVATE_ENDPOINTS", "true")
-  return TEST_S3_ENDPOINT
 
 
 def local_s3(endpoint: str, bucket: str, path: str = "", include: list[str] | None = None) -> dict:

@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.enums import JobType
 from app.models import Job
@@ -34,6 +35,9 @@ class JobContext:
       if self._conn is None:
         self._conn = await self._engine.connect()
       await update_job(self._conn, self.job_id, **values)
+
+  def session(self) -> AsyncSession:
+    return AsyncSession(self._engine, expire_on_commit=False)
 
   async def log(self, line: str) -> None:
     """Adds a line to the job's log."""

@@ -22,7 +22,7 @@ from app.models import Job
 
 logger = logging.getLogger(__name__)
 
-JOB_LOCK_CLASS = 1  # first key of the pg advisory locks on jobs. Can be any 32-bit integer. The second key is the job ID.
+JOB_LOCK_CLASS = 1936  # first key of the pg advisory locks on jobs. Can be any 32-bit integer. The second key is the job ID.
 MAX_RESTARTS = 2  # how often a job is queued again after its worker died, before it's failed
 LOG_MAX_LINES = 100  # lines of a job's log that are kept
 LOG_MAX_LINE_LENGTH = 1000  # maximum length of a line in a job's log. Longer lines are truncated.

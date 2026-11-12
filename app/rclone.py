@@ -6,8 +6,11 @@ import os
 import re
 import shutil
 import socket
+import tempfile
+from collections.abc import Awaitable, Callable, Iterable
 from contextlib import suppress
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from app.backends.base import RcloneRemote, SourceInputBase, private_endpoints_allowed
@@ -18,9 +21,16 @@ logger = logging.getLogger(__name__)
 
 TEST_TIMEOUT = 10.0  # seconds a source test may take in total
 TEST_MAX_ENTRIES = 100  # files returned by a source test
+LIST_TIMEOUT = 300.0  # seconds a full listing (for a fetch) may take
 
 MAX_CONCURRENT_TESTS = 4  # max. concurrent source tests, to avoid overloading the server
 _test_slots = asyncio.Semaphore(MAX_CONCURRENT_TESTS)
+
+
+class SourceError(Exception):
+  def __init__(self, error: ErrorResponse):
+    super().__init__(error.detail)
+    self.error = error
 
 
 def quote(value: str) -> str:
@@ -41,14 +51,16 @@ def build_remote(source: SourceInputBase) -> str:
   return connection_string(source.options.rclone_remote(source.path))
 
 
-def rclone_command(command: str, *flags: str, remote: str) -> list[str]:
+def rclone_command(command: str, *flags: str, remote: str, destination: str | None = None) -> list[str]:
   """
-  An rclone command line that ignores any config file, with short timeouts and no retries
+  An rclone command line that ignores any config file, with short timeouts and no low-level retries.
+  `destination` is a local path, for commands that copy.
   """
   rclone = shutil.which("rclone")
   if rclone is None:
     raise RuntimeError("rclone is not installed")
-  return [rclone, command, *flags, "--config", "", "--contimeout", "5s", "--timeout", "10s", "--low-level-retries", "1", "--", remote]
+  arguments = [remote] if destination is None else [remote, destination]
+  return [rclone, command, *flags, "--config", "", "--contimeout", "5s", "--timeout", "10s", "--low-level-retries", "1", "--", *arguments]
 
 
 def rclone_env() -> dict[str, str]:
@@ -67,7 +79,7 @@ async def resolve(host: str) -> list[str]:
 
 async def check_urls_resolve_publicly(source: SourceInputBase) -> None:
   """
-  Rejects a source with a `PublicUrl` option whose host name resolves to a private or internal address.
+  Rejects a source with a `PublicUrl` option whose host name resolves to a private or internal address, with a `SourceError`.
   """
   if private_endpoints_allowed():
     return
@@ -76,16 +88,21 @@ async def check_urls_resolve_publicly(source: SourceInputBase) -> None:
     assert host  # checked by the validator
     for address in await resolve(host):
       if not ipaddress.ip_address(address).is_global:
-        raise ApiError(422, "validation_error", f"{source.backend}.options.{name}: {host} is not a public address")
+        raise SourceError(ErrorResponse(code="validation_error", detail=f"{source.backend}.options.{name}: {host} is not a public address"))
+
+
+def entry_from_item(item: dict) -> SourceEntry:
+  """A file from an item of `rclone lsjson`."""
+  modified = item.get("ModTime")
+  return SourceEntry(path=item["Path"], size=item["Size"], modified_at=datetime.fromisoformat(modified) if modified else None)
 
 
 def parse_entry(line: str) -> SourceEntry | None:
+  """A file from a line of `rclone lsjson`, which prints one item per line"""
   line = line.strip().removesuffix(",")
   if not line.startswith("{"):
     return None
-  item = json.loads(line)
-  modified = item.get("ModTime")
-  return SourceEntry(path=item["Path"], size=item["Size"], modified_at=datetime.fromisoformat(modified) if modified else None)
+  return entry_from_item(json.loads(line))
 
 
 ERROR_LINE_PREFIX_PATTERN = re.compile(r"^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} (?:[A-Z]+\s*: )?")
@@ -112,16 +129,29 @@ def classify_error(stderr: str, source: SourceInputBase) -> ErrorResponse:
   return ErrorResponse(code="source_error", detail=f"Couldn't list the source: {last}")
 
 
+def rclone_error(stderr: str, source: SourceInputBase) -> ErrorResponse:
+  if invalid_filter := INVALID_FILTER_PATTERN.search(stderr):
+    return ErrorResponse(code="validation_error", detail=f"{source.backend}.include: {invalid_filter['reason']}")
+  return classify_error(stderr, source)
+
+
+def include_flags(source: SourceInputBase) -> list[str]:
+  return [f"--include={pattern}" for pattern in source.include]
+
+
 async def probe_source(source: SourceInputBase) -> SourceTestResult:
   """
   Lists the files of a source anonymously with `rclone lsjson`, including subfolders, and returns the first ones.
   rclone applies the `include` patterns itself, so only the files a sync would fetch are listed.
   Stops rclone as soon as it has listed one entry more than are returned, and kills it after `TEST_TIMEOUT` seconds.
   """
-  await check_urls_resolve_publicly(source)
+  try:
+    await check_urls_resolve_publicly(source)
+  except SourceError as error:
+    raise ApiError(422, error.error.code, error.error.detail) from None
   async with _test_slots:
     process = await asyncio.create_subprocess_exec(
-      *rclone_command("lsjson", "--recursive", "--files-only", *(f"--include={pattern}" for pattern in source.include), remote=build_remote(source)),
+      *rclone_command("lsjson", "--recursive", "--files-only", *include_flags(source), remote=build_remote(source)),
       stdin=asyncio.subprocess.DEVNULL,
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
@@ -160,9 +190,100 @@ async def probe_source(source: SourceInputBase) -> SourceTestResult:
         await stderr
 
   if process.returncode != 0 and not truncated:
-    if invalid_filter := INVALID_FILTER_PATTERN.search(error_output):
-      raise ApiError(422, "validation_error", f"{source.backend}.include: {invalid_filter['reason']}")
+    error = rclone_error(error_output, source)
+    if error.code == "validation_error":
+      raise ApiError(422, error.code, error.detail)
     logger.info("Source test failed: %s", error_output.strip())
-    return SourceTestResult(ok=False, error=classify_error(error_output, source), files=[], truncated=False)
+    return SourceTestResult(ok=False, error=error, files=[], truncated=False)
   entries.sort(key=lambda entry: entry.path)
   return SourceTestResult(ok=True, error=None, files=entries, truncated=truncated)
+
+
+async def list_source(source: SourceInputBase, timeout: float = LIST_TIMEOUT) -> list[SourceEntry]:
+  """
+  Lists every file of a source that its `include` patterns select, including subfolders.
+  Uses the server's modification times.
+  Raises `SourceError` if the source can't be listed within `timeout` seconds, or its config is invalid.
+  """
+  await check_urls_resolve_publicly(source)
+  command = rclone_command("lsjson", "--recursive", "--files-only", "--use-server-modtime", *include_flags(source), remote=build_remote(source))
+  process = await asyncio.create_subprocess_exec(
+    *command, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=rclone_env()
+  )
+  try:
+    async with asyncio.timeout(timeout):
+      stdout, stderr = await process.communicate()
+  except TimeoutError:
+    raise SourceError(ErrorResponse(code="source_timeout", detail=f"The source couldn't be listed within {timeout:g} s"))
+  finally:
+    if process.returncode is None:  # timed out or job was cancelled
+      process.kill()
+      await process.wait()
+
+  if process.returncode != 0:
+    raise SourceError(rclone_error(stderr.decode(errors="replace"), source))
+
+  return [entry_from_item(item) for item in json.loads(stdout)]
+
+
+async def copy_files(source: SourceInputBase, paths: Iterable[str], destination: Path, on_copied: Callable[[str], Awaitable[None]]) -> None:
+  """
+  Copies files of a source into a local folder, keeping their paths, and calls `on_copied` with each path once it's copied.
+  A file that's already in `destination` with the same size and modification time isn't copied again.
+  """
+  await check_urls_resolve_publicly(source)
+
+  destination.mkdir(parents=True, exist_ok=True)
+  with tempfile.NamedTemporaryFile("w", suffix=".txt", encoding="utf-8") as files_from_file:
+    files_from_file.write(
+      "".join(f"{path}\n" for path in paths)
+    )  # rclone's `--files-from` reads a file with one path per line, relative to the remote's root
+    files_from_file.flush()
+
+    command = rclone_command(
+      "copy",
+      "--files-from-raw",
+      files_from_file.name,
+      "--no-traverse",  # only look at the listed files in the destination
+      "--use-server-modtime",
+      "--use-json-log",
+      "--verbose",  # logs each copied file
+      "--stats",  # disables the stats summary at the end
+      "0",
+      remote=build_remote(source),
+      destination=str(destination),
+    )
+    process = await asyncio.create_subprocess_exec(
+      *command,
+      stdin=asyncio.subprocess.DEVNULL,
+      stdout=asyncio.subprocess.DEVNULL,
+      stderr=asyncio.subprocess.PIPE,
+      env=rclone_env(),
+      limit=1024 * 1024,
+    )
+
+    assert process.stderr
+    errors: list[str] = []
+    try:
+      while line := await process.stderr.readline():
+        try:
+          entry = json.loads(line)
+        except ValueError:
+          errors.append(line.decode(errors="replace"))
+          continue
+
+        if str(entry.get("msg", "")).startswith("Copied") and entry.get("object"):
+          # report successful copies to the caller
+          await on_copied(entry["object"])
+        elif entry.get("level") in ("error", "critical"):
+          # take errors from the structured json log instead of the unstructured stderr lines
+          errors.append(f"{entry.get('object', '')}: {entry.get('msg', '')}".strip(": "))
+
+      await process.wait()
+    finally:
+      if process.returncode is None:  # the job was cancelled, or `on_copied` failed
+        process.kill()
+        await process.wait()
+
+  if process.returncode != 0:
+    raise SourceError(rclone_error("\n".join(errors) or "rclone failed without a message", source))

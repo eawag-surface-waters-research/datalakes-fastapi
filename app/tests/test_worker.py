@@ -1,68 +1,22 @@
 import asyncio
-import random
-import uuid
 from collections.abc import AsyncGenerator
 
 import pytest
 import sqlalchemy as sa
 from httpx import ASGITransport, AsyncClient
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
-from sqlalchemy.pool import NullPool
-from sqlmodel import SQLModel, col
+from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlmodel import col
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import app.models
 from app.api import app
-from app.database import DATABASE_URL, engine, get_session
+from app.database import get_session
 from app.enums import JobStatus, JobType
 from app.models import Job
-from app.worker import JobContext, Worker, enqueue
+from app.worker import JobContext, enqueue
 from app.worker.handlers import Handler, NoParams
 from app.worker.queue import MAX_RESTARTS, claim, recover_orphans
-
-
-@pytest.fixture
-async def worker_engine() -> AsyncGenerator[AsyncEngine]:
-  """
-  The worker uses several connections at once, so these tests can't run inside one rolled-back transaction like the API tests.
-  Each test gets its own committed schema instead, dropped at the end.
-  """
-  schema = f"test_worker_{uuid.uuid4().hex[:12]}"
-  async with engine.begin() as conn:
-    await conn.execute(sa.text(f"CREATE SCHEMA {schema}"))
-  test_engine = create_async_engine(DATABASE_URL, poolclass=NullPool, connect_args={"server_settings": {"search_path": schema}})
-
-  try:
-    async with test_engine.begin() as conn:
-      await conn.run_sync(SQLModel.metadata.create_all)
-    yield test_engine
-  finally:
-    await test_engine.dispose()
-    async with engine.begin() as conn:
-      await conn.execute(sa.text(f"DROP SCHEMA {schema} CASCADE"))
-
-
-@pytest.fixture(autouse=True)
-def lock_class(monkeypatch) -> int:
-  """Advisory locks are shared by the whole database, so each test uses its own, to never clash with a worker running on the dev database."""
-  value = random.randint(1000, 2**31 - 1)
-  monkeypatch.setattr("app.worker.queue.JOB_LOCK_CLASS", value)
-  return value
-
-
-@pytest.fixture
-async def make_worker(worker_engine):
-  workers: list[Worker] = []
-
-  def make(**options) -> Worker:
-    worker = Worker(worker_engine, poll_interval=0.05, **options)
-    workers.append(worker)
-    return worker
-
-  yield make
-  for worker in workers:
-    worker.stop()
 
 
 @pytest.fixture
