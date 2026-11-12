@@ -23,6 +23,7 @@ Each entry has a status:
 | 10  | [A Postgres-backed job queue](#10-a-postgres-backed-job-queue)                                           | Decided |
 | 12  | [Old iframe links keep working through `legacy_axis`](#12-old-iframe-links-keep-working-through-legacy_axis) | Decided |
 | 13  | [Referenced objects are expanded by default](#13-referenced-objects-are-expanded-by-default)              | Decided |
+| 14  | [Two API docs: public and admin](#14-two-api-docs-public-and-admin)                                      | Decided |
 
 ---
 
@@ -188,3 +189,17 @@ Decided on 2026-11-09.
 - Only one level is expanded: objects inside `site`, `person`… keep their own references as IDs.
 - `POST`, `PUT` and `PATCH` responses only have the IDs.
 - Cached responses now contain sites and vocabulary entries, so changing one of them must invalidate the cached responses that embed it.
+
+## 14. Two API docs: public and admin
+
+Decided on 2026-11-12.
+
+**Question:** The OpenAPI spec will grow large, with many endpoints. Most of them (writes, sources, sync, jobs) are only of interest to administrators and integrators. Third-party users mostly want a few read endpoints. Should they see the whole spec?
+
+**Answer:** No. Serve two specs: a public one with only the endpoints chosen for third-party users, and a full one with every endpoint.
+
+**What this means:**
+
+- An endpoint only goes into the public spec when its route has a special marker tag. Everything else is only in the full spec.
+- The public spec is served at FastAPI's default `/docs`, `/redoc` and `/openapi.json`. The full spec is at `/admin/docs`, `/admin/redoc` and `/admin/openapi.json`.
+- The marker tag is removed from both specs, so it isn't rendered.

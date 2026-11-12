@@ -13,6 +13,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from app.database import DATABASE_URL, check_db_connection, engine, get_safe_db_url
 from app.errors import add_exception_handlers
 from app.observability import setup_observability
+from app.openapi import ADMIN_DOCS_URL, setup_openapi
 from app.routes import datasets, jobs, sources, sync
 
 setup_observability()
@@ -97,11 +98,14 @@ app.include_router(sources.router)
 app.include_router(sync.router)
 app.include_router(jobs.router)
 
+setup_openapi(app)  # after the routers, so both specs see every route
+
 
 @app.get("/", include_in_schema=False)
 def welcome():
   return {
     (
-      "Welcome to the Datalakes API from Eawag. Navigate to /docs or /redoc for documentation. For queries please contact James Runnalls (james.runnalls@eawag.ch)."
+      "Welcome to the Datalakes API from Eawag. Navigate to /docs or /redoc for documentation, "
+      f"or {ADMIN_DOCS_URL} for the full API including the endpoints for administrators. For queries please contact James Runnalls (james.runnalls@eawag.ch)."
     )
   }
