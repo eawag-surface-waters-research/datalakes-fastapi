@@ -285,4 +285,4 @@ async def delete_dataset(dataset_id: int, session: SessionDep):
   await ensure_no_active_job(session, dataset_id)
 
   await session.delete(dataset)
-  await enqueue(session, JobType.cleanup, params={"dataset_id": dataset_id})
+  await enqueue(session, JobType.cleanup, params={"dataset_id": dataset_id})  # queue job in the same transaction as the delete

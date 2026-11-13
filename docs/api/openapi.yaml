@@ -2229,6 +2229,37 @@ paths:
         "422":
           $ref: "#/components/responses/ValidationError"
 
+  /jobs/clear-queue:
+    post:
+      tags: [Jobs]
+      operationId: clearJobQueue
+      summary: Clear the job queue
+      description: |
+        Cancels every queued job, so no worker picks them up. Running jobs are left alone: cancel them one by one with `POST /jobs/{job_id}/cancel`.
+
+        `cleanup` jobs stay queued: they delete the files of deleted datasets, which would otherwise stay on disk.
+
+        **Access:** owner.
+      responses:
+        "200":
+          description: The jobs that were cancelled. Empty if no job was queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobList"
+              example:
+                - id: 5812
+                  dataset_id: 123
+                  type: sync
+                  status: cancelled
+                  progress: null
+                  error: null
+                  log: Was cancelled when the queue was cleared
+                  result: null
+                  created_at: "2024-10-30T10:20:00Z"
+                  started_at: null
+                  finished_at: "2024-10-30T10:21:05Z"
+
   /jobs/{job_id}:
     parameters:
       - $ref: "#/components/parameters/job_id"

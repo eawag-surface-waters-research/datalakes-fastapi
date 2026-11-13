@@ -108,3 +108,43 @@ async def test_list_jobs_of_missing_dataset(client):
   response = await client.get("/datasets/999/jobs")
   assert response.status_code == 404
   assert response.json() == {"detail": "Dataset 999 not found", "code": "not_found"}
+
+
+async def test_clear_queue_cancels_every_queued_job(client, session):
+  first = await add_job(session, status=JobStatus.queued, created_at=T0)
+  second = await add_job(session, type=JobType.fetch, status=JobStatus.queued, created_at=T0 + timedelta(hours=1))
+  response = await client.post("/jobs/clear-queue")
+  assert response.status_code == 200
+  body = response.json()
+  assert [job["id"] for job in body] == [first.id, second.id]  # oldest first
+  for job in body:
+    assert job["status"] == "cancelled"
+    assert job["finished_at"] is not None
+    assert job["log"] == "Was cancelled when the queue was cleared"
+  queued = (await client.get("/jobs", params={"status": "queued"})).json()
+  assert queued == []
+
+
+async def test_clear_queue_keeps_the_log_of_a_restarted_job(client, session):
+  job = await add_job(session, status=JobStatus.queued, log="The worker stopped unexpectedly while running the job. Queued again")
+  response = await client.post("/jobs/clear-queue")
+  assert response.json()[0]["log"] == "The worker stopped unexpectedly while running the job. Queued again\nWas cancelled when the queue was cleared"
+  await session.refresh(job)
+  assert job.status == JobStatus.cancelled
+
+
+async def test_clear_empty_queue(client):
+  response = await client.post("/jobs/clear-queue")
+  assert response.status_code == 200
+  assert response.json() == []
+
+
+async def test_clear_queue_keeps_cleanup_jobs(client, session):
+  cleanup = await add_job(session, type=JobType.cleanup, status=JobStatus.queued, params={"dataset_id": 512})
+  other = await add_job(session, status=JobStatus.queued)
+  response = await client.post("/jobs/clear-queue")
+  assert [job["id"] for job in response.json()] == [other.id]
+  await session.refresh(cleanup)
+  assert cleanup.status == JobStatus.queued
+  assert cleanup.finished_at is None
+  assert cleanup.log == ""

@@ -106,6 +106,52 @@ async def list_dataset_jobs(dataset_id: int, session: SessionDep, status: Status
   return await find_jobs(session, dataset_id=dataset_id, status=status, type=type)
 
 
+@router.post(
+  "/jobs/clear-queue",
+  response_model=list[JobRead],
+  summary="Clear the job queue",
+  responses={
+    200: {
+      "description": "The jobs that were cancelled. Empty if no job was queued.",
+      "content": {
+        "application/json": {
+          "example": [
+            {**QUEUED_JOB_EXAMPLE, "status": "cancelled", "log": "Was cancelled when the queue was cleared", "finished_at": "2024-10-30T10:21:05Z"}
+          ]
+        }
+      },
+    }
+  },
+)
+async def clear_queue(session: SessionDep):
+  """
+  Cancels every queued job, so no worker picks them up. Running jobs are left alone: cancel them one by one with `POST /jobs/{job_id}/cancel`.
+  `cleanup` jobs stay queued: they delete the files of deleted datasets, which would otherwise stay on disk.
+
+  **Access:** owner.
+  """
+  # `skip_locked` leaves out the jobs a worker is claiming right now
+  queued_query = (
+    select(Job)
+    .where(Job.status == JobStatus.queued, Job.type != JobType.cleanup)
+    .order_by(col(Job.created_at), col(Job.id))
+    .with_for_update(skip_locked=True)
+  )
+  jobs = list((await session.exec(queued_query)).all())
+
+  finished_at = datetime.now(UTC)
+  for job in jobs:
+    job.status = JobStatus.cancelled
+    job.finished_at = finished_at
+    job.log = append_log(job.log, "Was cancelled when the queue was cleared")
+    session.add(job)
+
+  cancelled = [JobRead.model_validate(job) for job in jobs]
+  await session.commit()
+
+  return cancelled
+
+
 @router.get(
   "/jobs/{job_id}",
   response_model=JobRead,
