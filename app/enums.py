@@ -50,6 +50,7 @@ class JobType(StrEnum):
   sync = "sync"
   rebuild = "rebuild"
   export = "export"
+  cleanup = "cleanup"
   test = "test"
 
 

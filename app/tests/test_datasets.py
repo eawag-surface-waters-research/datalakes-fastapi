@@ -437,3 +437,21 @@ async def test_delete_dataset_while_a_job_is_in_progress(client, session, status
   assert response.status_code == 409
   assert response.json() == {"detail": f"Dataset {created['id']} already has a job {status} (job {job.id})", "code": "job_in_progress"}
   assert (await client.get(f"/datasets/{created['id']}")).status_code == 200
+
+
+async def test_delete_dataset_queues_a_cleanup_job(client, session):
+  created = await create(client)
+  response = await client.delete(f"/datasets/{created['id']}")
+  assert response.status_code == 204
+  jobs = (await session.exec(select(Job))).all()
+  assert [(job.type, job.status, job.dataset_id, job.params) for job in jobs] == [
+    (JobType.cleanup, JobStatus.queued, None, {"dataset_id": created["id"]})
+  ]
+
+
+async def test_refused_delete_queues_no_cleanup_job(client, session):
+  created = await create(client)
+  session.add(Job(dataset_id=created["id"], type=JobType.sync, status=JobStatus.running))
+  await session.commit()
+  assert (await client.delete(f"/datasets/{created['id']}")).status_code == 409
+  assert (await session.exec(select(Job).where(Job.type == JobType.cleanup))).all() == []

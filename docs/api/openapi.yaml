@@ -458,7 +458,7 @@ paths:
       operationId: deleteDataset
       summary: Delete a dataset
       description: |
-        Deletes the dataset and everything that belongs to it: variables, issues, source, file index, jobs and collection memberships. Derived data (raw files, Zarr stores, exports, cache) is removed in the background.
+        Deletes the dataset and everything that belongs to it: variables, issues, source, file index, jobs and collection memberships. Derived data (raw files, Zarr stores, exports, cache) is removed in the background, by a `cleanup` job.
 
         A dataset can't be deleted while a fetch, sync or rebuild of it is queued or running (409): cancel the job first.
 
@@ -3341,7 +3341,8 @@ components:
         - `sync`: a fetch, then process the new and changed files.
         - `rebuild`: rebuild a dataset's Zarr stores from its archived files.
         - `export`: prepare a large download.
-      enum: [fetch, sync, rebuild, export]
+        - `cleanup`: delete the files of a deleted dataset. Queued by `DELETE /datasets/{dataset_id}`. Its `dataset_id` is `null`, as the dataset is gone; the deleted dataset's ID is in `params`.
+      enum: [fetch, sync, rebuild, export, cleanup]
 
     JobStatus:
       type: string

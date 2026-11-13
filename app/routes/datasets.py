@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select
 
 from app.database import SessionDep
-from app.enums import DatasetKind, DatasetSort, DatasetStatus, FeatureType
+from app.enums import DatasetKind, DatasetSort, DatasetStatus, FeatureType, JobType
 from app.errors import ApiError, ErrorResponse, not_found
 from app.models import Collection, CollectionDataset, Dataset, License, Organisation, Person, Site, Variable
 from app.openapi import PUBLIC_TAG
@@ -14,6 +14,7 @@ from app.params import Bbox, End, Expand, Start, parse_bbox, parse_time_range
 from app.references import Reference, check_references, expand_references
 from app.routes.sync import CONFLICT_RESPONSE, ensure_no_active_job
 from app.schemas import DatasetCreate, DatasetRead, DatasetUpdate, LicenseRead, OrganisationRead, PersonRead, SiteRead
+from app.worker.queue import enqueue
 
 router = APIRouter(prefix="/datasets", tags=["Datasets"])
 
@@ -270,6 +271,7 @@ async def update_dataset(
 async def delete_dataset(dataset_id: int, session: SessionDep):
   """
   Deletes the dataset and everything that belongs to it: variables, issues, source, file index, jobs and collection memberships.
+  Its local files are deleted in the background by a `cleanup` job
 
   A dataset can't be deleted while a fetch, sync or rebuild of it is queued or running (409): cancel the job first.
 
@@ -283,4 +285,4 @@ async def delete_dataset(dataset_id: int, session: SessionDep):
   await ensure_no_active_job(session, dataset_id)
 
   await session.delete(dataset)
-  await session.commit()
+  await enqueue(session, JobType.cleanup, params={"dataset_id": dataset_id})
