@@ -51,6 +51,50 @@ async def test_create_link_dataset(client):
   assert response.json()["external_url"] == data["external_url"]
 
 
+async def test_create_dataset_with_id(client):
+  response = await client.post("/datasets", json={"id": 512, "title": "Lake Geneva CTD casts at SHL2"})
+  assert response.status_code == 201
+  assert response.json()["id"] == 512
+  assert (await client.get("/datasets/512")).json()["title"] == "Lake Geneva CTD casts at SHL2"
+
+
+async def test_create_dataset_without_id_after_one_with_id_gets_the_next_id(client):
+  first = (await client.post("/datasets", json={"title": "First"})).json()["id"]
+  await client.post("/datasets", json={"id": first + 10, "title": "Given ID"})
+  response = await client.post("/datasets", json={"title": "Automatic ID"})
+  assert response.status_code == 201
+  assert response.json()["id"] == first + 11
+
+
+async def test_create_dataset_with_a_lower_id_does_not_move_the_sequence_back(client):
+  await client.post("/datasets", json={"id": 100, "title": "High ID"})
+  await client.post("/datasets", json={"id": 5, "title": "Low ID"})
+  response = await client.post("/datasets", json={"title": "Automatic ID"})
+  assert response.json()["id"] == 101
+
+
+async def test_create_dataset_does_not_reuse_the_id_of_a_deleted_dataset(client):
+  await client.post("/datasets", json={"id": 100, "title": "Deleted"})
+  await client.delete("/datasets/100")
+  await client.post("/datasets", json={"id": 50, "title": "Lower ID"})
+  response = await client.post("/datasets", json={"title": "Automatic ID"})
+  assert response.json()["id"] == 101
+
+
+async def test_create_dataset_with_existing_id_is_rejected(client):
+  existing = (await client.post("/datasets", json={"title": "Existing"})).json()["id"]
+  response = await client.post("/datasets", json={"id": existing, "title": "Duplicate"})
+  assert response.status_code == 409
+  assert response.json() == {"detail": f"Dataset {existing} already exists", "code": "already_exists"}
+  assert (await client.get(f"/datasets/{existing}")).json()["title"] == "Existing"
+
+
+async def test_create_dataset_with_null_id_gets_an_automatic_id(client):
+  response = await client.post("/datasets", json={"id": None, "title": "Data"})
+  assert response.status_code == 201
+  assert isinstance(response.json()["id"], int)
+
+
 @pytest.mark.parametrize(
   "data",
   [

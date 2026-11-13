@@ -37,6 +37,9 @@ class DatasetBase(SQLModel):
 
 
 class DatasetCreate(DatasetBase):
+  id: int | None = Field(
+    default=None, ge=1, le=2**31 - 1, description="The dataset's ID. Assigned automatically if left out.", schema_extra={"examples": [512]}
+  )
   kind: DatasetKind = DatasetKind.data
 
   @model_validator(mode="after")

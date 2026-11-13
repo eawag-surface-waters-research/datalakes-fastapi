@@ -262,7 +262,7 @@ paths:
         - A **data dataset** (`kind: data`, the default) gets its variables and source afterwards, through their own endpoints.
         - A **link dataset** (`kind: link`) only describes data shown elsewhere. It needs `external_url`, and can't have variables or a source.
 
-        The ID is always assigned automatically: an `id` in the body is ignored, like any other field that isn't listed. `kind` can't be changed later.
+        `id` is optional: without it, the next free ID is assigned. With it, the dataset gets that ID, or 409 if a dataset already has it. Automatically assigned IDs always come after the highest ID ever given, so they never collide with a given one and never reuse a deleted dataset's ID. `kind` can't be changed later.
 
         The response has the IDs of the site, contact person, organisation and license only. `GET /datasets/{dataset_id}` returns them in full.
 
@@ -285,6 +285,13 @@ paths:
                   organisation_id: 1
                   license_id: 1
                   origin: measurement
+              with_id:
+                summary: A dataset with a given ID
+                value:
+                  id: 512
+                  title: Lake Geneva CTD casts at SHL2
+                  feature_type: profile
+                  site_id: 1
               link:
                 summary: A link dataset
                 value:
@@ -309,6 +316,15 @@ paths:
                   $ref: "#/components/examples/DraftDataset"
                 link:
                   $ref: "#/components/examples/LinkDataset"
+        "409":
+          description: A dataset with the given `id` already exists.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                detail: Dataset 512 already exists
+                code: already_exists
         "422":
           description: The dataset is invalid, e.g. a link dataset without `external_url`, or a site that doesn't exist.
           content:
@@ -3930,6 +3946,12 @@ components:
         - type: object
           required: [title]
           properties:
+            id:
+              type: [integer, "null"]
+              minimum: 1
+              maximum: 2147483647
+              description: The dataset's ID. Assigned automatically if left out or `null`.
+              examples: [512]
             kind:
               type: string
               enum: [data, link]

@@ -1,7 +1,8 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Query
-from sqlalchemy import func
+from sqlalchemy import func, text
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select
 
 from app.database import SessionDep
@@ -107,7 +108,12 @@ async def list_datasets(
   status_code=201,
   summary="Create a dataset",
   responses={
-    422: {"model": ErrorResponse, "description": "The dataset is invalid, e.g. a link dataset without `external_url`, or a site that doesn't exist."}
+    409: {
+      "model": ErrorResponse,
+      "description": "A dataset with the given `id` already exists.",
+      "content": {"application/json": {"example": {"detail": "Dataset 512 already exists", "code": "already_exists"}}},
+    },
+    422: {"model": ErrorResponse, "description": "The dataset is invalid, e.g. a link dataset without `external_url`, or a site that doesn't exist."},
   },
 )
 async def create_dataset(data: DatasetCreate, session: SessionDep):
@@ -117,16 +123,51 @@ async def create_dataset(data: DatasetCreate, session: SessionDep):
   - A **data dataset** (`kind: data`, the default) gets its variables and source afterwards, through their own endpoints.
   - A **link dataset** (`kind: link`) only describes data shown elsewhere. It needs `external_url`, and can't have variables or a source.
 
-  The ID is always assigned automatically. `kind` can't be changed later.
+  `id` is optional: without it, the next free ID is assigned. With it, the dataset gets that ID, or 409 if a dataset already has it.
+  Automatically assigned IDs always come after the highest ID ever given, so they never collide with a given one and never reuse a deleted
+  dataset's ID. `kind` can't be changed later.
 
   The response has the IDs of the site, contact person, organisation and license only. `GET /datasets/{dataset_id}` returns them in full.
   """
+  if data.id is not None and await dataset_exists(session, data.id):
+    raise already_exists(data.id)
   await check_references(session, data, REFERENCES)
   dataset = Dataset.model_validate(data)
-  session.add(dataset)
-  await session.commit()
+  if data.id is not None:
+    await advance_id_sequence(session, data.id)
+
+  try:
+    session.add(dataset)
+    await session.commit()
+  except IntegrityError:
+    # another request created a dataset with the same ID between the check and the insert
+    await session.rollback()
+    if data.id is not None and await dataset_exists(session, data.id):
+      raise already_exists(data.id) from None
+    raise
+
   await session.refresh(dataset)
   return dataset
+
+
+async def dataset_exists(session: SessionDep, dataset_id: int) -> bool:
+  return await session.get(Dataset, dataset_id) is not None
+
+
+def already_exists(dataset_id: int) -> ApiError:
+  return ApiError(409, "already_exists", f"Dataset {dataset_id} already exists")
+
+
+async def advance_id_sequence(session: SessionDep, dataset_id: int) -> None:
+  """
+  Moves the ID sequence to at least `dataset_id`, so automatically assigned IDs don't collide with it.
+  """
+  await session.exec(
+    text(  # type: ignore[call-overload]
+      "SELECT setval(seq, GREATEST(:id, pg_sequence_last_value(seq))) FROM (SELECT pg_get_serial_sequence('datasets', 'id')::regclass AS seq) s"
+    ),
+    params={"id": dataset_id},
+  )
 
 
 @router.get(
