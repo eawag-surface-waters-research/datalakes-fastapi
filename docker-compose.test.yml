@@ -17,7 +17,7 @@ services:
       timeout: 2s
       retries: 30
   s3-seed:
-    image: rclone/rclone:1.71.2
+    image: rclone/rclone:1.76
     depends_on:
       s3:
         condition: service_healthy

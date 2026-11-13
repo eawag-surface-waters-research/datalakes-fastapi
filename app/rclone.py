@@ -106,7 +106,7 @@ def parse_entry(line: str) -> SourceEntry | None:
 
 
 ERROR_LINE_PREFIX_PATTERN = re.compile(r"^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} (?:[A-Z]+\s*: )?")
-INVALID_FILTER_PATTERN = re.compile(r"Failed to load filters: (?P<reason>.+)")
+INVALID_FILTER_PATTERN = re.compile(r'(?:Failed to load filters|failed to reload "filter" options): (?P<reason>.+)')
 
 
 # What rclone prints for each kind of failure, whatever the backend

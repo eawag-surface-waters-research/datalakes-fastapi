@@ -77,6 +77,11 @@ def lock_class(monkeypatch) -> int:
   return value
 
 
+@pytest.fixture(autouse=True)
+def no_private_endpoints(monkeypatch) -> None:
+  monkeypatch.setenv("SOURCE_ALLOW_PRIVATE_ENDPOINTS", "false")
+
+
 @pytest.fixture
 async def make_worker(worker_engine):
   workers: list[Worker] = []

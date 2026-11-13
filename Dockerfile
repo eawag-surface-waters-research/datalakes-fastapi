@@ -1,5 +1,5 @@
 ARG PYTHON_IMAGE=python:3.14-slim
-ARG RCLONE_IMAGE=rclone/rclone:1.71.2
+ARG RCLONE_IMAGE=rclone/rclone:1.76
 
 # to copy rclone binary from the rclone image
 FROM ${RCLONE_IMAGE} AS rclone
