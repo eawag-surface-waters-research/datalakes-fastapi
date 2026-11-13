@@ -16,8 +16,10 @@ class SwitchdriveOptions(Backend):
   info = BackendInfo(
     id=SourceBackend.switchdrive,
     name="SWITCHdrive public share",
-    description=("A folder shared by public link on SWITCHdrive. The share must not have a password, and should only contain the dataset's files."),
-    path_description="Folder inside the share, e.g. `Level2`. Empty for the whole share.",
+    description=(
+      "A folder shared by public link on SWITCHdrive. The share must not have a password, "
+      "and must hold the dataset's files directly, without subfolders."
+    ),
   )
 
   share_url: str = Field(
@@ -38,12 +40,15 @@ class SwitchdriveOptions(Backend):
     assert match  # to satisfy type checker
     return match["token"]
 
-  def rclone_remote(self, path: str) -> RcloneRemote:
+  def rclone_remote(self) -> RcloneRemote:
     # The share token is the WebDAV user name of a public share
-    return RcloneRemote(type="webdav", params={"url": WEBDAV_URL, "vendor": "owncloud", "user": self.share_token}, root=path)
+    return RcloneRemote(type="webdav", params={"url": WEBDAV_URL, "vendor": "owncloud", "user": self.share_token}, root="")
 
-  def not_found_detail(self, path: str) -> str:
-    return f"Folder {path or '/'} does not exist in the SWITCHdrive share"
+  def not_found_detail(self) -> str:
+    return "The SWITCHdrive share does not exist"
+
+  def has_folders_hint(self) -> str:
+    return "Share a folder that holds the files directly, without subfolders, or move the subfolders out of the share."
 
   def not_public_detail(self) -> str:
     # SWITCHdrive answers 401 both for a wrong link and for a share with a password

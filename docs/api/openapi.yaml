@@ -85,7 +85,7 @@ tags:
     description: Shared lists used in metadata, such as parameters, organisations, persons, sensors, licenses, site types, feature types and variable roles.
   # Ingestion
   - name: Sources
-    description: Where a dataset's files come from, either a public S3 bucket or a SWITCHdrive public share. Sources are read anonymously, and configs containing credentials are rejected.
+    description: Where a dataset's files come from, either a folder in a public S3 bucket or a SWITCHdrive public share. A source is a single folder that holds the files directly, without subfolders. Sources are read anonymously, and configs containing credentials are rejected.
   - name: Sync
     description: Fetch a dataset's files from its source, inspect a file in the archive to suggest variables, build the data from the archived files, and keep it up to date with syncs. Check whether a live dataset is up to date. Fetching, rebuilding and syncing run as jobs; inspecting answers at once.
   - name: Jobs
@@ -1638,13 +1638,16 @@ paths:
               example:
                 - backend: s3
                   name: S3 bucket
-                  description: A public bucket on Amazon S3 or an S3-compatible store. The bucket must allow anonymous reads.
-                  path_description: Prefix inside the bucket, e.g. `thermistorchain/Level2`. Empty for the whole bucket.
+                  description: A folder in a public bucket on Amazon S3 or an S3-compatible store. The bucket must allow anonymous reads, and the folder must hold the files directly, without subfolders.
                   options:
                     - name: bucket
                       required: true
                       description: Name of the bucket.
                       example: eawag-lexplore
+                    - name: path
+                      required: false
+                      description: Folder inside the bucket (the prefix), without a leading slash. Empty for the top level of the bucket. It must hold the files directly, without subfolders.
+                      example: thermistorchain/Level2
                     - name: region
                       required: false
                       description: Region of the bucket, for Amazon S3.
@@ -1655,8 +1658,7 @@ paths:
                       example: https://s3.example.org
                 - backend: switchdrive
                   name: SWITCHdrive public share
-                  description: A folder shared by public link on SWITCHdrive. The share must not have a password, and should only contain the dataset's files, since anyone with the link can read all of it.
-                  path_description: Folder inside the share, e.g. `Level2`. Empty for the whole share.
+                  description: A folder shared by public link on SWITCHdrive. The share must not have a password, and must hold the dataset's files directly, without subfolders.
                   options:
                     - name: share_url
                       required: true
@@ -1675,7 +1677,9 @@ paths:
 
         The response is 200 whether or not the source could be read: check `ok`. An invalid config, such as one with credentials, an S3 `endpoint` that isn't a public HTTPS address, or an `include` pattern rclone can't read, is rejected with 422 before anything is tried.
 
-        The source is listed including subfolder. The listing stops after 100 entries (`truncated` is then `true`) or after 10 s (`source_timeout`).
+        A source is a single folder that holds the files directly. Only the files in it are listed, never those in subfolders. A source with subfolders fails with `source_has_folders`, whatever its `include` patterns, but `files` still lists its files.
+
+        The listing returns up to 100 files (`truncated` is then `true`) and stops after 10 s (`source_timeout`). A folder without matching files is not an error: `ok` is `true` and `files` is empty.
 
         **Access:** user.
       requestBody:
@@ -1695,9 +1699,8 @@ paths:
                   backend: s3
                   options:
                     bucket: eawag-lexplore
-                    region: eu-central-1
+                    path: thermistorchain/Level2
                     access_key_id: AKIAIOSFODNN7EXAMPLE
-                  path: thermistorchain/Level2
       responses:
         "200":
           description: The result of the test.
@@ -1717,6 +1720,18 @@ paths:
                         modified_at: "2024-06-01T00:12:40Z"
                       - path: L2_ThermistorChain_202406.nc
                         size: 17920455
+                        modified_at: "2024-07-01T00:12:38Z"
+                    truncated: false
+                has_folders:
+                  summary: The source has subfolders
+                  value:
+                    ok: false
+                    error:
+                      detail: The source has 2 subfolders (2024/, 2025/), but sources must be a single folder. Set `path` to the folder that holds the files directly, without subfolders.
+                      code: source_has_folders
+                    files:
+                      - path: L2_ThermistorChain_latest.nc
+                        size: 1204332
                         modified_at: "2024-07-01T00:12:38Z"
                     truncated: false
                 not_public:
@@ -1790,7 +1805,9 @@ paths:
       description: |
         Sets the dataset's source, replacing the current one. A dataset has one source. Nothing is downloaded yet: start a fetch for that.
 
-        The source is tested first, like `POST /sources/test`. It's only saved if it can be read anonymously.
+        The source is tested first, like `POST /sources/test`. It's only saved if it can be read anonymously and has no subfolders.
+
+        Subfolders that appear later don't break the dataset: a fetch or sync skips the files in them and logs a warning.
 
         Replacing a source keeps the files already synced: they're the dataset's archive. The next fetch or sync adds the files of the new source. Increases the dataset's `version`.
 
@@ -1833,7 +1850,7 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
         "422":
-          description: The config is invalid (e.g. it contains credentials), the source can't be read anonymously, or the dataset is a link dataset.
+          description: The config is invalid (e.g. it contains credentials), the source can't be read anonymously, it has subfolders, or the dataset is a link dataset.
           content:
             application/json:
               schema:
@@ -1848,6 +1865,11 @@ paths:
                   value:
                     detail: Access denied to bucket eawag-lexplore. Sources are read anonymously, so the bucket must allow public reads.
                     code: source_not_public
+                has_folders:
+                  summary: The source has subfolders
+                  value:
+                    detail: The source has a subfolder (2024/), but sources must be a single folder. Set `path` to the folder that holds the files directly, without subfolders.
+                    code: source_has_folders
                 link_dataset:
                   summary: The dataset is a link dataset
                   value:
@@ -1897,7 +1919,7 @@ paths:
             schema:
               $ref: "#/components/schemas/InspectRequest"
             example:
-              file: 2024/L2_ThermistorChain_202406.nc
+              file: L2_ThermistorChain_202406.nc
       responses:
         "200":
           description: The suggestions.
@@ -1927,7 +1949,7 @@ paths:
                 not_in_archive:
                   summary: The file isn't in the archive
                   value:
-                    detail: "File '2024/L2_ThermistorChain_202406.nc' is not in the archive of dataset 512. Fetch the dataset first."
+                    detail: "File 'L2_ThermistorChain_202406.nc' is not in the archive of dataset 512. Fetch the dataset first."
                     code: file_not_in_archive
                 unreadable_file:
                   summary: The file can't be read
@@ -1941,7 +1963,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
               example:
-                detail: Reading 2024/L2_ThermistorChain_202406.nc took longer than 10 s
+                detail: Reading L2_ThermistorChain_202406.nc took longer than 10 s
                 code: inspect_timeout
 
   /datasets/{dataset_id}/fetch:
@@ -1954,7 +1976,7 @@ paths:
       description: |
         Queues a `fetch` job and returns it. The worker then:
 
-        1. Lists the source and compares it with the file index. A file is **new** if the index doesn't have it, **changed** if its size or modified time differs, and **removed** if it's no longer in the source.
+        1. Lists the source and compares it with the file index. A file is **new** if the index doesn't have it, **changed** if its size or modified time differs, and **removed** if it's no longer in the source. Only the files directly in the source's folder count: if subfolders have appeared since the source was set, the files in them are skipped and the log has a warning naming the subfolders. The job doesn't fail because of them.
         2. Copies new and changed files into the dataset's archive, replacing the old copy of a changed file. Removed files are deleted from the archive and from the index. New and changed files are marked `new` in the index.
 
         If the listing fails, or is empty for a dataset that had files, the job fails and removes nothing.
@@ -1998,7 +2020,7 @@ paths:
       description: |
         Queues a `sync` job and returns it. It is a fetch (`POST /datasets/{dataset_id}/fetch`) followed by processing. The worker:
 
-        1. Lists the source and compares it with the file index. A file is **new** if the index doesn't have it, **changed** if its size or modified time differs, and **removed** if it's no longer in the source.
+        1. Lists the source and compares it with the file index. A file is **new** if the index doesn't have it, **changed** if its size or modified time differs, and **removed** if it's no longer in the source. Only the files directly in the source's folder count: if subfolders have appeared since the source was set, the files in them are skipped and the log has a warning naming the subfolders. The job doesn't fail because of them.
         2. Copies new and changed files into the dataset's archive, replacing the old copy of a changed file. Removed files are deleted from the archive and from the index. New and changed files are marked `new` in the index.
         3. Processes the files marked `new` into the dataset's data. A changed file replaces the data of its old version, and a removed file's data is taken out. The dataset's extents and availability are recomputed, so they can shrink. Its `version` goes up if anything changed.
 
@@ -2210,8 +2232,8 @@ paths:
                   type: sync
                   status: failed
                   progress: 1
-                  error: "1 of 3 new files failed: 2024/L2_ThermistorChain_202410.nc: variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
-                  log: "Copied 3 files (52.1 MB)\n2024/L2_ThermistorChain_202410.nc failed: variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
+                  error: "1 of 3 new files failed: L2_ThermistorChain_202410.nc: variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
+                  log: "Copied 3 files (52.1 MB)\nL2_ThermistorChain_202410.nc failed: variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
                   result:
                     files_new: 3
                     files_changed: 0
@@ -2220,7 +2242,7 @@ paths:
                     bytes_copied: 54632118
                     files_processed: 2
                     files_failed:
-                      - path: 2024/L2_ThermistorChain_202410.nc
+                      - path: L2_ThermistorChain_202410.nc
                         codes: [missing_variable]
                         error: "variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
                   created_at: "2024-10-30T00:00:02Z"
@@ -2366,7 +2388,7 @@ paths:
               example:
                 - id: 20411
                   dataset_id: 123
-                  path: 2024/L2_ThermistorChain_202409.nc
+                  path: L2_ThermistorChain_202409.nc
                   size: 18011342
                   modified_at: "2024-10-01T00:12:41Z"
                   time_start: "2024-09-01T00:00:00Z"
@@ -2376,7 +2398,7 @@ paths:
                   error: null
                 - id: 20412
                   dataset_id: 123
-                  path: 2024/L2_ThermistorChain_202410.nc
+                  path: L2_ThermistorChain_202410.nc
                   size: 17388120
                   modified_at: "2024-10-30T00:00:01Z"
                   time_start: null
@@ -3436,17 +3458,10 @@ components:
     # -------------------------------------------------------------------------
     # Sources
     # -------------------------------------------------------------------------
-    SourcePath:
-      type: string
-      default: ""
-      description: Folder inside the bucket or share, without a leading slash. Empty for the whole bucket or share. For S3, this is the prefix.
-      pattern: "^(?!/)(?!.*(^|/)\\.\\.(/|$)).*$"
-      examples: [thermistorchain/Level2]
-
     SourceInclude:
       type: array
       default: []
-      description: Which files to sync, as [rclone filter patterns](https://rclone.org/filtering/), relative to `path`. Empty for all files.
+      description: Which files to sync, as [rclone filter patterns](https://rclone.org/filtering/), relative to the source's folder. Empty for all files.
       items:
         type: string
       examples: [["*.nc"]]
@@ -3461,6 +3476,13 @@ components:
           type: string
           pattern: "^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$"
           examples: [eawag-lexplore]
+        path:
+          type: string
+          default: ""
+          maxLength: 1024
+          description: Folder inside the bucket (the prefix), without a leading slash. Empty for the top level of the bucket. It must hold the files directly, without subfolders. A trailing slash is removed.
+          pattern: "^(?!/)(?!.*(^|/)\\.\\.(/|$)).*$"
+          examples: [thermistorchain/Level2]
         region:
           type: [string, "null"]
           description: Region of the bucket, for Amazon S3.
@@ -3495,8 +3517,6 @@ components:
           const: s3
         options:
           $ref: "#/components/schemas/S3Options"
-        path:
-          $ref: "#/components/schemas/SourcePath"
         include:
           $ref: "#/components/schemas/SourceInclude"
 
@@ -3511,8 +3531,6 @@ components:
           const: switchdrive
         options:
           $ref: "#/components/schemas/SwitchdriveOptions"
-        path:
-          $ref: "#/components/schemas/SourcePath"
         include:
           $ref: "#/components/schemas/SourceInclude"
 
@@ -3525,6 +3543,8 @@ components:
         - an option that isn't listed for its backend,
         - an S3 `endpoint` that isn't a public HTTPS address, or that contains a user name or password (`validation_error`),
         - a link to a password-protected SWITCHdrive share (`credentials_not_allowed`).
+
+        A source is a single folder that holds the files directly, without subfolders. For S3, it's `options.path` in the bucket. For SWITCHdrive, it's the shared folder itself.
       oneOf:
         - $ref: "#/components/schemas/S3SourceInput"
         - $ref: "#/components/schemas/SwitchdriveSourceInput"
@@ -3537,13 +3557,11 @@ components:
     SourceFields:
       type: object
       description: Fields every stored source has.
-      required: [dataset_id, path, include, last_tested_at, last_synced_at, created_at, updated_at]
+      required: [dataset_id, include, last_tested_at, last_synced_at, created_at, updated_at]
       properties:
         dataset_id:
           type: integer
           examples: [123]
-        path:
-          $ref: "#/components/schemas/SourcePath"
         include:
           $ref: "#/components/schemas/SourceInclude"
         last_tested_at:
@@ -3616,7 +3634,7 @@ components:
     SourceType:
       type: object
       description: A backend a source can use.
-      required: [backend, name, description, path_description, options]
+      required: [backend, name, description, options]
       properties:
         backend:
           type: string
@@ -3626,9 +3644,6 @@ components:
           description: Name to show in a form.
         description:
           type: string
-        path_description:
-          type: string
-          description: What `path` means for this backend.
         options:
           type: array
           description: The options accepted in a source's `options`.
@@ -3647,8 +3662,8 @@ components:
       properties:
         path:
           type: string
-          description: Path relative to the source's `path`.
-          examples: [2024/L2_ThermistorChain_202406.nc]
+          description: Name of the file. Sources are a single folder, so this is the path relative to it.
+          examples: [L2_ThermistorChain_202406.nc]
         size:
           type: [integer, "null"]
           description: Size in bytes.
@@ -3664,20 +3679,20 @@ components:
       properties:
         ok:
           type: boolean
-          description: Whether the source could be listed anonymously.
+          description: Whether the source could be listed anonymously and has no subfolders.
         error:
-          description: Why the source couldn't be read, or `null`. `code` is one of `source_not_found`, `source_not_public`, `source_unreachable` (the server can't be reached, e.g. a wrong endpoint), `source_timeout` or `source_error` (anything else, with rclone's message).
+          description: Why the source can't be used, or `null`. `code` is one of `source_not_found`, `source_not_public`, `source_unreachable` (the server can't be reached, e.g. a wrong endpoint), `source_timeout`, `source_has_folders` (the source's folder has subfolders, which it must not have; `files` still lists its files) or `source_error` (anything else, with rclone's message).
           anyOf:
             - $ref: "#/components/schemas/Error"
             - type: "null"
         files:
           type: array
-          description: The first files the source's `include` patterns select, up to 100, including subfolders. These are the files a sync would fetch.
+          description: The first files directly in the source's folder that its `include` patterns select, up to 100. These are the files a sync would fetch.
           items:
             $ref: "#/components/schemas/SourceEntry"
         truncated:
           type: boolean
-          description: "`true` when there are more than 100 entries."
+          description: "`true` when there are more than 100 files."
 
     # -------------------------------------------------------------------------
     # Sync, inspect and status
@@ -3689,7 +3704,7 @@ components:
         file:
           type: string
           description: Path of a file in the dataset's archive, as listed by `GET /datasets/{dataset_id}/files`. NetCDF and HDF5 files are supported.
-          examples: [2024/L2_ThermistorChain_202406.nc]
+          examples: [L2_ThermistorChain_202406.nc]
 
     InspectedVariable:
       description: A suggested variable, ready to send to `POST /datasets/{dataset_id}/variables`, with what was found in the file.
@@ -3816,8 +3831,8 @@ components:
           type: integer
         path:
           type: string
-          description: Path relative to the source's `path`.
-          examples: [2024/L2_ThermistorChain_202409.nc]
+          description: Name of the file in the source's folder.
+          examples: [L2_ThermistorChain_202409.nc]
         size:
           type: integer
           description: Size in bytes.
@@ -5999,13 +6014,13 @@ components:
         updated_at: "2024-08-19T08:30:00Z"
 
     S3SourceInput:
-      summary: An S3 bucket and prefix
+      summary: A folder in an S3 bucket
       value:
         backend: s3
         options:
           bucket: eawag-lexplore
+          path: thermistorchain/Level2
           region: eu-central-1
-        path: thermistorchain/Level2
         include: ["*.nc"]
 
     SwitchdriveSourceInput:
@@ -6014,7 +6029,6 @@ components:
         backend: switchdrive
         options:
           share_url: https://drive.switch.ch/index.php/s/aB3dE5fG7hJ9kL1
-        path: Level2
         include: ["*.nc"]
 
     S3Source:
@@ -6024,9 +6038,9 @@ components:
         backend: s3
         options:
           bucket: eawag-lexplore
+          path: thermistorchain/Level2
           region: eu-central-1
           endpoint: null
-        path: thermistorchain/Level2
         include: ["*.nc"]
         last_tested_at: "2024-10-30T10:04:12Z"
         last_synced_at: "2024-10-30T10:04:12Z"
@@ -6040,7 +6054,6 @@ components:
         backend: switchdrive
         options:
           share_url: https://drive.switch.ch/index.php/s/aB3dE5fG7hJ9kL1
-        path: Level2
         include: ["*.nc"]
         last_tested_at: "2024-10-30T09:05:00Z"
         last_synced_at: null
@@ -6050,13 +6063,13 @@ components:
     CredentialsRejected:
       summary: A source config with an access key
       value:
-        detail: "Unknown option 'access_key_id' for backend s3. Allowed: bucket, region, endpoint"
+        detail: "Unknown option 'access_key_id' for backend s3. Allowed: bucket, path, region, endpoint"
         code: unknown_option
 
     UnknownOptionRejected:
       summary: An option the backend doesn't accept
       value:
-        detail: "Unknown option 'acl' for backend s3. Allowed: bucket, region, endpoint"
+        detail: "Unknown option 'acl' for backend s3. Allowed: bucket, path, region, endpoint"
         code: unknown_option
 
     QueuedSyncJob:
@@ -6082,8 +6095,8 @@ components:
         type: sync
         status: failed
         progress: 1
-        error: "1 of 3 new files failed: 2024/L2_ThermistorChain_202410.nc: variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
-        log: "Copied 3 files (52.1 MB)\nProcessed 2024/L2_ThermistorChain_202408.nc\nProcessed 2024/L2_ThermistorChain_202409.nc\n2024/L2_ThermistorChain_202410.nc failed: variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
+        error: "1 of 3 new files failed: L2_ThermistorChain_202410.nc: variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
+        log: "Copied 3 files (52.1 MB)\nProcessed L2_ThermistorChain_202408.nc\nProcessed L2_ThermistorChain_202409.nc\nL2_ThermistorChain_202410.nc failed: variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
         result:
           files_new: 3
           files_changed: 0
@@ -6092,7 +6105,7 @@ components:
           bytes_copied: 54632118
           files_processed: 2
           files_failed:
-            - path: 2024/L2_ThermistorChain_202410.nc
+            - path: L2_ThermistorChain_202410.nc
               codes: [missing_variable]
               error: "variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
         created_at: "2024-10-30T00:00:02Z"
@@ -6102,7 +6115,7 @@ components:
     InspectedFile:
       summary: Suggested variables for a thermistor chain file
       value:
-        file: 2024/L2_ThermistorChain_202406.nc
+        file: L2_ThermistorChain_202406.nc
         format: netcdf4
         feature_type: timeSeriesProfile
         variables:

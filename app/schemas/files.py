@@ -21,7 +21,7 @@ class FileRead(SQLModel):
 
   id: int = Field(schema_extra={"examples": [20411]})
   dataset_id: int = Field(schema_extra={"examples": [123]})
-  path: str = Field(description="Path relative to the source's `path`.", schema_extra={"examples": ["2024/L2_ThermistorChain_202409.nc"]})
+  path: str = Field(description="Name of the file in the source's folder.", schema_extra={"examples": ["L2_ThermistorChain_202409.nc"]})
   size: int = Field(description="Size in bytes.")
   modified_at: datetime = Field(description="When the file last changed in the source.")
   time_start: datetime | None = Field(description="Time of the file's first value. `null` until the file is processed.")

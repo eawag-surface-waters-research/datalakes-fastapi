@@ -9,6 +9,7 @@ import socket
 import tempfile
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import suppress
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 TEST_TIMEOUT = 10.0  # seconds a source test may take in total
 TEST_MAX_ENTRIES = 100  # files returned by a source test
 LIST_TIMEOUT = 300.0  # seconds a full listing (for a fetch) may take
+FOLDERS_SHOWN = 5  # subfolders named in messages
 
 MAX_CONCURRENT_TESTS = 4  # max. concurrent source tests, to avoid overloading the server
 _test_slots = asyncio.Semaphore(MAX_CONCURRENT_TESTS)
@@ -48,7 +50,7 @@ def connection_string(remote: RcloneRemote) -> str:
 
 def build_remote(source: SourceInputBase) -> str:
   """The rclone connection string that reads a source."""
-  return connection_string(source.options.rclone_remote(source.path))
+  return connection_string(source.options.rclone_remote())
 
 
 def rclone_command(command: str, *flags: str, remote: str, destination: str | None = None) -> list[str]:
@@ -91,18 +93,54 @@ async def check_urls_resolve_publicly(source: SourceInputBase) -> None:
         raise SourceError(ErrorResponse(code="validation_error", detail=f"{source.backend}.options.{name}: {host} is not a public address"))
 
 
-def entry_from_item(item: dict) -> SourceEntry:
-  """A file from an item of `rclone lsjson`."""
-  modified = item.get("ModTime")
-  return SourceEntry(path=item["Path"], size=item["Size"], modified_at=datetime.fromisoformat(modified) if modified else None)
+@dataclass
+class SourceListing:
+  """
+  What's directly in a source's folder: the files that its `include` patterns select, and every subfolder.
+  Sources must not have subfolders, and the files in subfolders are never listed.
+  """
+
+  files: list[SourceEntry] = field(default_factory=list)
+  folders: list[str] = field(default_factory=list)  # names of the first `FOLDERS_SHOWN` subfolders
+  folder_count: int = 0
+
+  def add(self, item: dict, max_files: int | None = None) -> bool:
+    """Adds an item of `rclone lsjson`. Returns `False` if it's a file that wasn't added because there are already `max_files`."""
+    if item.get("IsDir"):
+      self.folder_count += 1
+      if len(self.folders) < FOLDERS_SHOWN:
+        self.folders.append(item["Path"])
+      return True
+
+    if max_files is not None and len(self.files) >= max_files:
+      return False
+
+    modified = item.get("ModTime")
+    self.files.append(SourceEntry(path=item["Path"], size=item["Size"], modified_at=datetime.fromisoformat(modified) if modified else None))
+    return True
+
+  def describe_folders(self) -> str:
+    """The subfolders for a message, e.g. `a subfolder (2024/)` or `7 subfolders (2020/, 2021/, 2022/, 2023/, 2024/ and 2 more)`."""
+    names = ", ".join(f"{name}/" for name in self.folders)
+
+    more = self.folder_count - len(self.folders)
+    if more:
+      names += f" and {more} more"
+
+    return f"a subfolder ({names})" if self.folder_count == 1 else f"{self.folder_count} subfolders ({names})"
 
 
-def parse_entry(line: str) -> SourceEntry | None:
-  """A file from a line of `rclone lsjson`, which prints one item per line"""
+def parse_item(line: str) -> dict | None:
+  """An item from a line of `rclone lsjson`, which prints one item per line"""
   line = line.strip().removesuffix(",")
   if not line.startswith("{"):
     return None
-  return entry_from_item(json.loads(line))
+  return json.loads(line)
+
+
+def has_folders_error(listing: SourceListing, source: SourceInputBase) -> ErrorResponse:
+  detail = f"The source has {listing.describe_folders()}, but sources must be a single folder. {source.options.has_folders_hint()}"
+  return ErrorResponse(code="source_has_folders", detail=detail)
 
 
 ERROR_LINE_PREFIX_PATTERN = re.compile(r"^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} (?:[A-Z]+\s*: )?")
@@ -121,7 +159,7 @@ def classify_error(stderr: str, source: SourceInputBase) -> ErrorResponse:
   last = lines[-1] if lines else "rclone failed without a message"
 
   if any(text in stderr for text in NOT_FOUND_MESSAGES):
-    return ErrorResponse(code="source_not_found", detail=source.options.not_found_detail(source.path))
+    return ErrorResponse(code="source_not_found", detail=source.options.not_found_detail())
   if any(text in stderr for text in NOT_PUBLIC_MESSAGES):
     return ErrorResponse(code="source_not_public", detail=source.options.not_public_detail())
   if any(text in stderr for text in UNREACHABLE_MESSAGES):
@@ -135,15 +173,26 @@ def rclone_error(stderr: str, source: SourceInputBase) -> ErrorResponse:
   return classify_error(stderr, source)
 
 
-def include_flags(source: SourceInputBase) -> list[str]:
-  return [f"--include={pattern}" for pattern in source.include]
+def filter_flags(source: SourceInputBase) -> list[str]:
+  """
+  rclone filter rules that select the files matching the `include` patterns, and every folder.
+  `--include` would hide folders whenever no pattern could match in them (e.g. `/*.nc`), but subfolders must always be listed to find them.
+  """
+  if not source.include:
+    return []
+  return ["--filter=+ */", *(f"--filter=+ {pattern}" for pattern in source.include), "--filter=- **"]
+
+
+def lsjson_command(source: SourceInputBase, *flags: str) -> list[str]:
+  return rclone_command("lsjson", *flags, *filter_flags(source), remote=build_remote(source))
 
 
 async def probe_source(source: SourceInputBase) -> SourceTestResult:
   """
-  Lists the files of a source anonymously with `rclone lsjson`, including subfolders, and returns the first ones.
+  Lists the files of a source anonymously with `rclone lsjson`, and returns the first ones.
   rclone applies the `include` patterns itself, so only the files a sync would fetch are listed.
-  Stops rclone as soon as it has listed one entry more than are returned, and kills it after `TEST_TIMEOUT` seconds.
+  A source with subfolders fails with `source_has_folders`, but its files are still returned.
+  Kills rclone after `TEST_TIMEOUT` seconds.
   """
   try:
     await check_urls_resolve_publicly(source)
@@ -151,7 +200,7 @@ async def probe_source(source: SourceInputBase) -> SourceTestResult:
     raise ApiError(422, error.error.code, error.error.detail) from None
   async with _test_slots:
     process = await asyncio.create_subprocess_exec(
-      *rclone_command("lsjson", "--recursive", "--files-only", *include_flags(source), remote=build_remote(source)),
+      *lsjson_command(source),
       stdin=asyncio.subprocess.DEVNULL,
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
@@ -161,21 +210,16 @@ async def probe_source(source: SourceInputBase) -> SourceTestResult:
 
     assert process.stdout and process.stderr  # to satisfy type checker
     stderr = asyncio.create_task(process.stderr.read())
-    entries: list[SourceEntry] = []
+    listing = SourceListing()
     truncated = False
 
     try:
       async with asyncio.timeout(TEST_TIMEOUT):
+        # read every line, because a subfolder can come after the first files. rclone lists the whole folder before it prints anything anyway.
         while line := await process.stdout.readline():
-          entry = parse_entry(line.decode())
-          if entry is None:
-            continue
-          if len(entries) == TEST_MAX_ENTRIES:
+          item = parse_item(line.decode())
+          if item is not None and not listing.add(item, max_files=TEST_MAX_ENTRIES):
             truncated = True
-            break
-          entries.append(entry)
-        if truncated:
-          process.kill()
         await process.wait()
         error_output = (await stderr).decode(errors="replace")
     except TimeoutError:
@@ -189,24 +233,26 @@ async def probe_source(source: SourceInputBase) -> SourceTestResult:
       with suppress(asyncio.CancelledError):
         await stderr
 
-  if process.returncode != 0 and not truncated:
+  if process.returncode != 0:
     error = rclone_error(error_output, source)
     if error.code == "validation_error":
       raise ApiError(422, error.code, error.detail)
     logger.info("Source test failed: %s", error_output.strip())
     return SourceTestResult(ok=False, error=error, files=[], truncated=False)
-  entries.sort(key=lambda entry: entry.path)
-  return SourceTestResult(ok=True, error=None, files=entries, truncated=truncated)
+
+  listing.files.sort(key=lambda entry: entry.path)
+  error = has_folders_error(listing, source) if listing.folder_count else None
+  return SourceTestResult(ok=error is None, error=error, files=listing.files, truncated=truncated)
 
 
-async def list_source(source: SourceInputBase, timeout: float = LIST_TIMEOUT) -> list[SourceEntry]:
+async def list_source(source: SourceInputBase, timeout: float = LIST_TIMEOUT) -> SourceListing:
   """
-  Lists every file of a source that its `include` patterns select, including subfolders.
+  Lists every file directly in the source's folder that its `include` patterns select, and its subfolders, but not the files in them.
   Uses the server's modification times.
   Raises `SourceError` if the source can't be listed within `timeout` seconds, or its config is invalid.
   """
   await check_urls_resolve_publicly(source)
-  command = rclone_command("lsjson", "--recursive", "--files-only", "--use-server-modtime", *include_flags(source), remote=build_remote(source))
+  command = lsjson_command(source, "--use-server-modtime")
   process = await asyncio.create_subprocess_exec(
     *command, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=rclone_env()
   )
@@ -223,7 +269,10 @@ async def list_source(source: SourceInputBase, timeout: float = LIST_TIMEOUT) ->
   if process.returncode != 0:
     raise SourceError(rclone_error(stderr.decode(errors="replace"), source))
 
-  return [entry_from_item(item) for item in json.loads(stdout)]
+  listing = SourceListing()
+  for item in json.loads(stdout):
+    listing.add(item)
+  return listing
 
 
 async def copy_files(source: SourceInputBase, paths: Iterable[str], destination: Path, on_copied: Callable[[str], Awaitable[None]]) -> None:

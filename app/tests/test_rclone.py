@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.backends import RcloneRemote
-from app.rclone import connection_string, parse_entry, quote, rclone_env
+from app.rclone import SourceListing, connection_string, parse_item, quote, rclone_env
 
 
 def test_connection_string():
@@ -40,20 +40,41 @@ def test_rclone_env_leaves_out_credentials(monkeypatch):
   assert set(rclone_env()) == {"PATH", "HOME"}
 
 
-def test_parse_entry_for_a_file():
+def listing_of(*lines: str) -> SourceListing:
+  listing = SourceListing()
+  for line in lines:
+    item = parse_item(line)
+    assert item is not None
+    listing.add(item)
+  return listing
+
+
+def test_parse_a_file():
   line = (
-    '{"Path":"2024/a.nc","Name":"a.nc","Size":18342011,"MimeType":"application/x-netcdf",'
+    '{"Path":"a.nc","Name":"a.nc","Size":18342011,"MimeType":"application/x-netcdf",'
     '"ModTime":"2024-06-01T02:12:40.5+02:00","IsDir":false,"Tier":"STANDARD"},'
   )
-  entry = parse_entry(line)
-  assert entry is not None
-  assert entry.path == "2024/a.nc"
+  listing = listing_of(line)
+  assert listing.folder_count == 0
+  [entry] = listing.files
+  assert entry.path == "a.nc"
   assert entry.size == 18342011
   assert entry.modified_at == datetime(2024, 6, 1, 0, 12, 40, 500000, tzinfo=UTC)
 
 
-def test_parse_entry_without_modification_time():
-  entry = parse_entry('{"Path":"a.nc","Name":"a.nc","Size":0,"MimeType":"application/x-netcdf","IsDir":false}')
-  assert entry is not None
+def test_parse_a_file_without_modification_time():
+  [entry] = listing_of('{"Path":"a.nc","Name":"a.nc","Size":0,"MimeType":"application/x-netcdf","IsDir":false}').files
   assert entry.size == 0
   assert entry.modified_at is None
+
+
+def test_parse_a_folder():
+  listing = listing_of('{"Path":"2024","Name":"2024","Size":-1,"MimeType":"inode/directory","ModTime":"2000-01-01T00:00:00Z","IsDir":true},')
+  assert listing.files == []
+  assert listing.folders == ["2024"]
+  assert listing.folder_count == 1
+
+
+def test_lines_that_are_not_items_are_skipped():
+  assert parse_item("[") is None
+  assert parse_item("]") is None

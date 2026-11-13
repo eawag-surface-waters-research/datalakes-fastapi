@@ -75,20 +75,17 @@ def compare(listing: list[SourceEntry], indexed: dict[str, File], archive: Path)
 
 
 def delete_from_archive(archive: Path, paths: list[str]) -> None:
-  """Deletes files from the archive, and the folders they leave empty (also the parent folders)"""
+  """Deletes files from the archive."""
   for path in paths:
-    file = archive / path
-    file.unlink(missing_ok=True)
-    folder = file.parent
-    while folder != archive and folder.is_dir() and not any(folder.iterdir()):
-      folder.rmdir()
-      folder = folder.parent
+    (archive / path).unlink(missing_ok=True)
 
 
 class FetchHandler(Handler[NoParams]):
   """
   Makes a dataset's archive match its source: copies new and changed files into `raw/{dataset_id}/`, deletes removed ones, and updates the file index.
   A file is changed when its size or modification time differs from the index, or when it's indexed but missing from the archive.
+
+  Only the files directly in the source's folder are fetched. Subfolders aren't allowed when a source is set, but if one appears later, the job only logs a warning and skips the files in it.
 
   If the source can't be listed, or has no files while the archive has some, the job fails and nothing is removed.
   """
@@ -105,17 +102,21 @@ class FetchHandler(Handler[NoParams]):
 
     await context.log("Listing the source")
     try:
-      listing = await list_source(source)
+      source_listing = await list_source(source)
     except SourceError as error:
       raise JobError(f"Couldn't list the source, nothing was changed: {error.error.detail}") from None
 
-    safe: list[SourceEntry] = []
-    for entry in listing:
+    if source_listing.folder_count:
+      await context.log(
+        f"Warning: the source has {source_listing.describe_folders()}. Their files are not fetched, only those directly in the source's folder."
+      )
+
+    listing: list[SourceEntry] = []
+    for entry in source_listing.files:
       if is_safe_relative_path(entry.path):
-        safe.append(entry)
+        listing.append(entry)
       else:
         await context.log(f"Skipped {entry.path!r}: its path was considered unsafe")
-    listing = safe
 
     if not listing and indexed:
       raise JobError(
@@ -153,7 +154,7 @@ class FetchHandler(Handler[NoParams]):
 
       files = (await session.exec(select(File).where(File.dataset_id == dataset_id))).all()
     try:
-      source = parse_source(stored.model_dump(include={"backend", "options", "path", "include"}))
+      source = parse_source(stored.model_dump(include={"backend", "options", "include"}))
     except ValidationError as error:
       raise JobError(f"The dataset's source is no longer valid, set it again: {format_validation_errors(error.errors())}")
 

@@ -22,7 +22,6 @@ def test_every_backend_id_has_exactly_one_backend():
 def test_backend_has_info(backend):
   assert backend.info.name
   assert backend.info.description
-  assert backend.info.path_description
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -51,8 +50,7 @@ def test_backend_rejects_options_not_on_its_allowlist(backend):
 
 def s3(**options) -> str:
   """The rclone remote of an S3 source."""
-  path = options.pop("path", "")
-  return build_remote(parse_source({"backend": "s3", "options": {"bucket": "eawag-lexplore", **options}, "path": path}))
+  return build_remote(parse_source({"backend": "s3", "options": {"bucket": "eawag-lexplore", **options}}))
 
 
 def test_s3_remote_for_amazon_s3():
@@ -82,7 +80,7 @@ def test_s3_endpoint_is_a_public_url():
 
 def test_s3_error_messages_name_the_bucket():
   options = S3Options.model_validate({"bucket": "eawag-lexplore"})
-  assert options.not_found_detail("") == "Bucket eawag-lexplore does not exist"
+  assert options.not_found_detail() == "Bucket eawag-lexplore does not exist"
   assert options.not_public_detail().startswith("Access denied to bucket eawag-lexplore.")
 
 
@@ -90,13 +88,11 @@ def test_s3_error_messages_name_the_bucket():
 
 
 def test_switchdrive_remote_uses_only_the_token():
-  source = parse_source(
-    {"backend": "switchdrive", "options": {"share_url": "https://drive.switch.ch/index.php/s/aB3dE5fG7hJ9kL1/"}, "path": "Level2"}
-  )
-  assert build_remote(source) == ":webdav,url='https://drive.switch.ch/public.php/webdav/',vendor='owncloud',user='aB3dE5fG7hJ9kL1':Level2"
+  source = parse_source({"backend": "switchdrive", "options": {"share_url": "https://drive.switch.ch/index.php/s/aB3dE5fG7hJ9kL1/"}})
+  assert build_remote(source) == ":webdav,url='https://drive.switch.ch/public.php/webdav/',vendor='owncloud',user='aB3dE5fG7hJ9kL1':"
 
 
 def test_switchdrive_error_messages():
   options = SwitchdriveOptions.model_validate({"share_url": "https://drive.switch.ch/index.php/s/aB3dE5fG7hJ9kL1"})
-  assert options.not_found_detail("Level2") == "Folder Level2 does not exist in the SWITCHdrive share"
+  assert options.not_found_detail() == "The SWITCHdrive share does not exist"
   assert "password" in options.not_public_detail()

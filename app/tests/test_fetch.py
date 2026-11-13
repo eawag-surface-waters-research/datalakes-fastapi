@@ -68,10 +68,8 @@ async def add_dataset(engine: AsyncEngine, bucket: Bucket | None, include: list[
     await session.commit()
     assert dataset.id is not None
     if bucket is not None:
-      options = {"bucket": "public", "endpoint": bucket.endpoint}
-      session.add(
-        Source(dataset_id=dataset.id, backend=SourceBackend.s3, options=options, path=bucket.prefix, include=include or [], last_tested_at=T0)
-      )
+      options = {"bucket": "public", "path": bucket.prefix, "endpoint": bucket.endpoint}
+      session.add(Source(dataset_id=dataset.id, backend=SourceBackend.s3, options=options, include=include or [], last_tested_at=T0))
       await session.commit()
     return dataset.id
 
@@ -103,25 +101,43 @@ def result(**counts: int) -> dict[str, int]:
 
 
 async def test_first_fetch_copies_every_file(worker_engine, make_worker, bucket, filesystem):
-  bucket.put("L2/2024/a.nc", "a" * 10)
-  bucket.put("L2/b.nc", "b" * 5)
+  bucket.put("a.nc", "a" * 10)
+  bucket.put("b.nc", "b" * 5)
   dataset_id = await add_dataset(worker_engine, bucket)
 
   job = await fetch(worker_engine, make_worker, dataset_id)
   assert job.status == JobStatus.succeeded, job.error
   assert job.result == result(files_new=2, bytes_copied=15)
   assert job.progress == 1
-  assert archive(filesystem, dataset_id) == {"L2/2024/a.nc": "a" * 10, "L2/b.nc": "b" * 5}
+  assert "Warning" not in (job.log or "")
+  assert archive(filesystem, dataset_id) == {"a.nc": "a" * 10, "b.nc": "b" * 5}
 
   files = await index(worker_engine, dataset_id)
-  assert set(files) == {"L2/2024/a.nc", "L2/b.nc"}
-  assert files["L2/2024/a.nc"].size == 10
-  assert files["L2/2024/a.nc"].status == FileStatus.new
-  assert files["L2/2024/a.nc"].modified_at > T0
+  assert set(files) == {"a.nc", "b.nc"}
+  assert files["a.nc"].size == 10
+  assert files["a.nc"].status == FileStatus.new
+  assert files["a.nc"].modified_at > T0
 
   async with AsyncSession(worker_engine) as session:
     source = (await session.exec(select(Source).where(Source.dataset_id == dataset_id))).one()
   assert source.last_tested_at > T0
+
+
+@pytest.mark.parametrize("include", [[], ["/*.nc"]])
+async def test_files_in_subfolders_are_skipped_with_a_warning(worker_engine, make_worker, bucket, filesystem, include):
+  """Sources with subfolders can't be set, but a subfolder that appears later must not break the dataset."""
+  bucket.put("a.nc", "a")
+  bucket.put("L2/b.nc", "b")
+  bucket.put("L2/2024/c.nc", "c")
+  bucket.put("old/d.nc", "d")
+  dataset_id = await add_dataset(worker_engine, bucket, include=include)
+
+  job = await fetch(worker_engine, make_worker, dataset_id)
+  assert job.status == JobStatus.succeeded, job.error
+  assert job.result == result(files_new=1, bytes_copied=1)
+  assert "Warning: the source has 2 subfolders (L2/, old/). Their files are not fetched" in (job.log or "")
+  assert archive(filesystem, dataset_id) == {"a.nc": "a"}
+  assert set(await index(worker_engine, dataset_id)) == {"a.nc"}
 
 
 async def test_second_fetch_copies_nothing(worker_engine, make_worker, bucket, filesystem):
@@ -174,32 +190,32 @@ async def test_changed_file_is_copied_again(worker_engine, make_worker, bucket, 
 
 async def test_file_missing_from_archive_is_copied_again(worker_engine, make_worker, bucket, filesystem):
   bucket.put("a.nc", "a")
-  bucket.put("L2/b.nc", "bb")
+  bucket.put("b.nc", "bb")
   dataset_id = await add_dataset(worker_engine, bucket)
   await fetch(worker_engine, make_worker, dataset_id)
 
   # as if a build had processed the file
   async with AsyncSession(worker_engine) as session:
-    file = (await session.exec(select(File).where(File.path == "L2/b.nc"))).one()
+    file = (await session.exec(select(File).where(File.path == "b.nc"))).one()
     file.status, file.time_start, file.time_end = FileStatus.ok, T0, T0
     session.add(file)
     await session.commit()
 
-  (filesystem / "raw" / str(dataset_id) / "L2" / "b.nc").unlink()
+  (filesystem / "raw" / str(dataset_id) / "b.nc").unlink()
   job = await fetch(worker_engine, make_worker, dataset_id)
   assert job.status == JobStatus.succeeded, job.error
   assert job.result == result(files_changed=1, files_unchanged=1, bytes_copied=2)
   assert "1 of the changed files were missing from the archive" in (job.log or "")
-  assert archive(filesystem, dataset_id) == {"a.nc": "a", "L2/b.nc": "bb"}
+  assert archive(filesystem, dataset_id) == {"a.nc": "a", "b.nc": "bb"}
 
-  file = (await index(worker_engine, dataset_id))["L2/b.nc"]
+  file = (await index(worker_engine, dataset_id))["b.nc"]
   assert file.status == FileStatus.new  # to be processed again
   assert file.time_start == T0
 
 
 async def test_deleted_archive_is_copied_again(worker_engine, make_worker, bucket, filesystem):
   bucket.put("a.nc", "a")
-  bucket.put("L2/b.nc", "bb")
+  bucket.put("b.nc", "bb")
   dataset_id = await add_dataset(worker_engine, bucket)
   await fetch(worker_engine, make_worker, dataset_id)
 
@@ -207,20 +223,19 @@ async def test_deleted_archive_is_copied_again(worker_engine, make_worker, bucke
   job = await fetch(worker_engine, make_worker, dataset_id)
   assert job.status == JobStatus.succeeded, job.error
   assert job.result == result(files_changed=2, bytes_copied=3)
-  assert archive(filesystem, dataset_id) == {"a.nc": "a", "L2/b.nc": "bb"}
+  assert archive(filesystem, dataset_id) == {"a.nc": "a", "b.nc": "bb"}
 
 
 async def test_removed_file_is_deleted(worker_engine, make_worker, bucket, filesystem):
   bucket.put("a.nc", "a")
-  bucket.put("L2/2024/b.nc", "b")
+  bucket.put("b.nc", "b")
   dataset_id = await add_dataset(worker_engine, bucket)
   await fetch(worker_engine, make_worker, dataset_id)
 
-  bucket.remove("L2/2024/b.nc")
+  bucket.remove("b.nc")
   job = await fetch(worker_engine, make_worker, dataset_id)
   assert job.result == result(files_removed=1, files_unchanged=1)
   assert archive(filesystem, dataset_id) == {"a.nc": "a"}
-  assert not (filesystem / "raw" / str(dataset_id) / "L2").exists()  # the folders it left empty are gone too
   assert set(await index(worker_engine, dataset_id)) == {"a.nc"}
 
 
@@ -268,7 +283,7 @@ async def test_unreachable_source_removes_nothing(worker_engine, make_worker, bu
 
   async with AsyncSession(worker_engine) as session:
     source = (await session.exec(select(Source).where(Source.dataset_id == dataset_id))).one()
-    source.options = {"bucket": "public", "endpoint": "http://127.0.0.1:1"}  # nothing listens on port 1
+    source.options = {"bucket": "public", "path": bucket.prefix, "endpoint": "http://127.0.0.1:1"}  # nothing listens on port 1
     session.add(source)
     await session.commit()
 

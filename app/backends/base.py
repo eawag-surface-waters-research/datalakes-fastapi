@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Annotated, Any, ClassVar
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, GetCoreSchemaHandler, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, GetCoreSchemaHandler, model_validator
 from pydantic_core import core_schema
 
 from app.enums import SourceBackend
@@ -68,7 +68,6 @@ class BackendInfo:
   id: SourceBackend
   name: str
   description: str
-  path_description: str  # what a source's `path` means for this backend
 
 
 @dataclass(frozen=True)
@@ -101,12 +100,16 @@ class Backend(BaseModel):
     return data
 
   @abstractmethod
-  def rclone_remote(self, path: str) -> RcloneRemote:
-    """The rclone remote that reads this source."""
+  def rclone_remote(self) -> RcloneRemote:
+    """The rclone remote that reads this source. Its root is the folder that holds the files."""
 
-  def not_found_detail(self, path: str) -> str:
-    """The message when the source, or the path in it, doesn't exist."""
-    return f"Folder {path or '/'} does not exist in the source"
+  def not_found_detail(self) -> str:
+    """The message when the source, or the folder in it, doesn't exist."""
+    return "The source's folder does not exist"
+
+  def has_folders_hint(self) -> str:
+    """What to do when the source has subfolders."""
+    return "Share a folder that holds the files directly, without subfolders."
 
   def not_public_detail(self) -> str:
     """The message when the source can't be read anonymously."""
@@ -117,19 +120,13 @@ class Backend(BaseModel):
     return {name: value for name in type(self).model_fields if isinstance(value := getattr(self, name), PublicUrl)}
 
 
-SourcePath = Annotated[
-  str,
-  Field(
-    max_length=1024,
-    description="Folder inside the bucket or share, without a leading slash. Empty for the whole bucket or share. For S3, this is the prefix.",
-    examples=["thermistorchain/Level2"],
-  ),
-]
 SourceInclude = Annotated[
   list[Annotated[str, Field(min_length=1, max_length=256)]],
   Field(
     max_length=50,
-    description="Which files to sync, as [rclone filter patterns](https://rclone.org/filtering/), relative to `path`. Empty for all files.",
+    description=(
+      "Which files to sync, as [rclone filter patterns](https://rclone.org/filtering/), relative to the source's folder. Empty for all files."
+    ),
     examples=[["*.nc"]],
   ),
 ]
@@ -142,14 +139,4 @@ class SourceInputBase(BaseModel):
 
   backend: SourceBackend
   options: Backend
-  path: SourcePath = ""
   include: SourceInclude = []
-
-  @field_validator("path")
-  @classmethod
-  def path_must_be_relative(cls, path: str) -> str:
-    if path.startswith("/"):
-      raise invalid("Must not start with a slash")
-    if ".." in path.split("/"):
-      raise invalid("Must not contain '..'")
-    return path.rstrip("/")

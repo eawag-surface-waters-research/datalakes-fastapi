@@ -46,7 +46,7 @@ FAILED_JOB_EXAMPLE = {
     "files_unchanged": 64,
     "bytes_copied": 54632118,
     "files_processed": 2,
-    "files_failed": [{"path": "2024/L2_ThermistorChain_202410.nc", "error": "variable 'temp' not found"}],
+    "files_failed": [{"path": "L2_ThermistorChain_202410.nc", "error": "variable 'temp' not found"}],
   },
   "created_at": "2024-10-30T00:00:02Z",
   "started_at": "2024-10-30T00:00:03Z",

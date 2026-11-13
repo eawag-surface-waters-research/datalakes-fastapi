@@ -18,11 +18,10 @@ router = APIRouter(tags=["Sources"])
 
 SOURCE_INPUT_EXAMPLES: dict[str, Example] = {
   "s3": {
-    "summary": "An S3 bucket and prefix",
+    "summary": "A folder in an S3 bucket",
     "value": {
       "backend": "s3",
-      "options": {"bucket": "eawag-lexplore", "region": "eu-central-1"},
-      "path": "thermistorchain/Level2",
+      "options": {"bucket": "eawag-lexplore", "path": "thermistorchain/Level2", "region": "eu-central-1"},
       "include": ["*.nc"],
     },
   },
@@ -31,7 +30,6 @@ SOURCE_INPUT_EXAMPLES: dict[str, Example] = {
     "value": {
       "backend": "switchdrive",
       "options": {"share_url": "https://drive.switch.ch/index.php/s/aB3dE5fG7hJ9kL1"},
-      "path": "Level2",
       "include": ["*.nc"],
     },
   },
@@ -39,8 +37,7 @@ SOURCE_INPUT_EXAMPLES: dict[str, Example] = {
     "summary": "A config with credentials (rejected with 422)",
     "value": {
       "backend": "s3",
-      "options": {"bucket": "eawag-lexplore", "region": "eu-central-1", "access_key_id": "AKIAIOSFODNN7EXAMPLE"},
-      "path": "thermistorchain/Level2",
+      "options": {"bucket": "eawag-lexplore", "path": "thermistorchain/Level2", "access_key_id": "AKIAIOSFODNN7EXAMPLE"},
     },
   },
 }
@@ -72,9 +69,24 @@ async def list_source_types():
                 "ok": True,
                 "error": None,
                 "files": [
-                  {"path": "2024/L2_ThermistorChain_202405.nc", "size": 18342011, "modified_at": "2024-06-01T00:12:40Z"},
-                  {"path": "2024/L2_ThermistorChain_202406.nc", "size": 17920455, "modified_at": "2024-07-01T00:12:38Z"},
+                  {"path": "L2_ThermistorChain_202405.nc", "size": 18342011, "modified_at": "2024-06-01T00:12:40Z"},
+                  {"path": "L2_ThermistorChain_202406.nc", "size": 17920455, "modified_at": "2024-07-01T00:12:38Z"},
                 ],
+                "truncated": False,
+              },
+            },
+            "has_folders": {
+              "summary": "The source has subfolders",
+              "value": {
+                "ok": False,
+                "error": {
+                  "detail": (
+                    "The source has 2 subfolders (2024/, 2025/), but sources must be a single folder. "
+                    "Set `path` to the folder that holds the files directly, without subfolders."
+                  ),
+                  "code": "source_has_folders",
+                },
+                "files": [{"path": "L2_ThermistorChain_latest.nc", "size": 1204332, "modified_at": "2024-07-01T00:12:38Z"}],
                 "truncated": False,
               },
             },
@@ -111,11 +123,11 @@ async def list_source_types():
           "examples": {
             "credentials": {
               "summary": "A source config with an access key",
-              "value": {"detail": "Unknown option 'access_key_id' for backend s3. Allowed: bucket, region, endpoint", "code": "unknown_option"},
+              "value": {"detail": "Unknown option 'access_key_id' for backend s3. Allowed: bucket, path, region, endpoint", "code": "unknown_option"},
             },
             "unknown_option": {
               "summary": "An option the backend doesn't accept",
-              "value": {"detail": "Unknown option 'acl' for backend s3. Allowed: bucket, region, endpoint", "code": "unknown_option"},
+              "value": {"detail": "Unknown option 'acl' for backend s3. Allowed: bucket, path, region, endpoint", "code": "unknown_option"},
             },
           }
         }
@@ -141,10 +153,13 @@ async def test_source(
   - an S3 `endpoint` that isn't a public HTTPS address, or that contains a user name or password (`validation_error`),
   - an `include` pattern rclone can't read, e.g. `[abc` (`validation_error`).
 
-  The listing includes subfolders and stops after 100 files (`truncated` is then `true`), or after 10 s (`source_timeout`).
-  rclone lists a whole folder before returning any of it, so a folder with very many files directly in it (about 100,000) can time out.
-  rclone applies the `include` patterns, so only the files a sync would fetch are listed. Folders aren't listed: a file's `path` shows its folders.
-  A prefix without matching files is not an error: `ok` is `true` and `files` is empty.
+  A source is a single folder that holds the files directly. Only the files in it are listed, never those in subfolders.
+  A source with subfolders fails with `source_has_folders`, whatever its `include` patterns.
+
+  The listing returns up to 100 files (`truncated` is then `true`), and stops after 10 s (`source_timeout`).
+  rclone lists a whole folder before returning any of it, so a folder with very many files (about 100,000) can time out.
+  rclone applies the `include` patterns, so only the files a sync would fetch are listed.
+  A folder without matching files is not an error: `ok` is `true` and `files` is empty.
   """
   return await probe_source(source)
 
@@ -152,8 +167,7 @@ async def test_source(
 SOURCE_READ_EXAMPLE = {
   "dataset_id": 123,
   "backend": "s3",
-  "options": {"bucket": "eawag-lexplore", "region": "eu-central-1", "endpoint": None},
-  "path": "thermistorchain/Level2",
+  "options": {"bucket": "eawag-lexplore", "path": "thermistorchain/Level2", "region": "eu-central-1", "endpoint": None},
   "include": ["*.nc"],
   "last_tested_at": "2024-10-30T10:04:12Z",
   "last_synced_at": "2024-10-30T10:04:12Z",
@@ -222,19 +236,31 @@ async def get_source(dataset_id: int, session: SessionDep):
     **CONFLICT_RESPONSE,
     422: {
       "model": ErrorResponse,
-      "description": "The config is invalid (e.g. it contains credentials), the source can't be read anonymously, or the dataset is a link dataset.",
+      "description": (
+        "The config is invalid (e.g. it contains credentials), the source can't be read anonymously, it has subfolders, or the dataset is a link dataset."
+      ),
       "content": {
         "application/json": {
           "examples": {
             "credentials": {
               "summary": "A source config with an access key",
-              "value": {"detail": "Unknown option 'access_key_id' for backend s3. Allowed: bucket, region, endpoint", "code": "unknown_option"},
+              "value": {"detail": "Unknown option 'access_key_id' for backend s3. Allowed: bucket, path, region, endpoint", "code": "unknown_option"},
             },
             "not_public": {
               "summary": "The source can't be read anonymously",
               "value": {
                 "detail": "Access denied to bucket eawag-lexplore. Sources are read anonymously, so the bucket must allow public reads.",
                 "code": "source_not_public",
+              },
+            },
+            "has_folders": {
+              "summary": "The source has subfolders",
+              "value": {
+                "detail": (
+                  "The source has a subfolder (2024/), but sources must be a single folder. "
+                  "Set `path` to the folder that holds the files directly, without subfolders."
+                ),
+                "code": "source_has_folders",
               },
             },
             "link_dataset": {
@@ -256,7 +282,10 @@ async def set_source(
   """
   Sets the dataset's source, replacing the current one. A dataset has one source. Nothing is downloaded yet, a fetch must be queued to do that
 
-  The source is tested first like in `POST /sources/test`. It's only saved if it can be read anonymously. If not, the response is 422 with the test's error.
+  The source is tested first like in `POST /sources/test`. It's only saved if it can be read anonymously and has no subfolders.
+  If not, the response is 422 with the test's error.
+
+  Subfolders that appear later don't break the dataset: a fetch or sync skips the files in them and logs a warning.
 
   Replacing a source keeps the files already fetched. The next fetch or sync adds the files of the new source.
   The dataset's `version` is increased.
@@ -287,7 +316,6 @@ async def set_source(
   values = {
     "backend": source.backend,
     "options": source.options.model_dump(mode="json"),
-    "path": source.path,
     "include": source.include,
     "last_tested_at": datetime.now(UTC),
   }

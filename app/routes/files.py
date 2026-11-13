@@ -16,7 +16,7 @@ FILES_EXAMPLE = [
   {
     "id": 20411,
     "dataset_id": 123,
-    "path": "2024/L2_ThermistorChain_202409.nc",
+    "path": "L2_ThermistorChain_202409.nc",
     "size": 18011342,
     "modified_at": "2024-10-01T00:12:41Z",
     "time_start": "2024-09-01T00:00:00Z",
@@ -28,7 +28,7 @@ FILES_EXAMPLE = [
   {
     "id": 20412,
     "dataset_id": 123,
-    "path": "2024/L2_ThermistorChain_202410.nc",
+    "path": "L2_ThermistorChain_202410.nc",
     "size": 17388120,
     "modified_at": "2024-10-30T00:00:01Z",
     "time_start": None,

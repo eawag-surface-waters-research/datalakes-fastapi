@@ -22,7 +22,7 @@ async def test_list_source_types(client):
   assert required == {"s3": ["bucket"], "switchdrive": ["share_url"]}
 
 
-S3_SOURCE = {"backend": "s3", "options": {"bucket": "eawag-lexplore", "region": "eu-central-1"}, "path": "thermistorchain/Level2"}
+S3_SOURCE = {"backend": "s3", "options": {"bucket": "eawag-lexplore", "path": "thermistorchain/Level2", "region": "eu-central-1"}}
 SWITCHDRIVE_SOURCE = {"backend": "switchdrive", "options": {"share_url": "https://drive.switch.ch/index.php/s/aB3dE5fG7hJ9kL1"}}
 
 
@@ -60,7 +60,7 @@ async def test_source_types_list_exactly_the_accepted_options(client):
 async def test_option_not_on_the_allowlist_is_rejected(client, no_rclone, option):
   response = await client.post("/sources/test", json=with_options(S3_SOURCE, **{option: "x"}))
   assert response.status_code == 422
-  assert response.json() == {"detail": f"Unknown option '{option}' for backend s3. Allowed: bucket, region, endpoint", "code": "unknown_option"}
+  assert response.json() == {"detail": f"Unknown option '{option}' for backend s3. Allowed: bucket, path, region, endpoint", "code": "unknown_option"}
 
 
 @pytest.mark.parametrize(
@@ -103,8 +103,9 @@ async def test_endpoint_that_resolves_to_a_private_address_is_rejected(client, n
 @pytest.mark.parametrize(
   ("change", "field"),
   [
-    ({"path": "/thermistorchain"}, "s3.path"),  # leading slash
-    ({"path": "thermistorchain/../other"}, "s3.path"),  # path traversal
+    ({"options": {"bucket": "eawag-lexplore", "path": "/thermistorchain"}}, "s3.options.path"),  # leading slash
+    ({"options": {"bucket": "eawag-lexplore", "path": "thermistorchain/../other"}}, "s3.options.path"),  # path traversal
+    ({"path": "thermistorchain/Level2"}, "s3.path"),
     ({"options": {"bucket": "Not_A_Bucket"}}, "s3.options.bucket"),  # invalid bucket name
     ({"options": {"bucket": "eawag-lexplore", "region": "eu central"}}, "s3.options.region"),  # space in region
     ({"options": {}}, "s3.options.bucket"),  # missing bucket
@@ -139,41 +140,84 @@ async def test_unknown_backend_is_rejected(client, no_rclone):
 
 
 def local_s3(endpoint: str, bucket: str, path: str = "", include: list[str] | None = None) -> dict:
-  return {"backend": "s3", "options": {"bucket": bucket, "endpoint": endpoint}, "path": path, "include": include or []}
+  return {"backend": "s3", "options": {"bucket": bucket, "path": path, "endpoint": endpoint}, "include": include or []}
 
 
-async def test_public_bucket_is_listed(client, s3_endpoint):
-  response = await client.post("/sources/test", json=local_s3(s3_endpoint, "public", include=["*.nc"]))
+# The `public` test bucket has `README.md`, a flat folder `flat/` and a folder `L2/` with subfolders.
+FLAT_FILES = ["L2_202406.nc", "L2_202501.nc", "L2_latest.nc", "README.md"]
+HAS_FOLDERS_IN_L2 = {
+  "detail": (
+    "The source has 2 subfolders (2024/, 2025/), but sources must be a single folder. "
+    "Set `path` to the folder that holds the files directly, without subfolders."
+  ),
+  "code": "source_has_folders",
+}
+
+
+async def test_public_folder_is_listed(client, s3_endpoint):
+  response = await client.post("/sources/test", json=local_s3(s3_endpoint, "public", path="flat", include=["*.nc"]))
   assert response.status_code == 200
   body = response.json()
   assert body["ok"] is True
   assert body["error"] is None
   assert body["truncated"] is False
   files = {entry["path"]: entry for entry in body["files"]}
-  assert list(files) == ["L2/2024/L2_202406.nc", "L2/2025/L2_202501.nc", "L2/L2_latest.nc"]
-  assert set(files["L2/2024/L2_202406.nc"]) == {"path", "size", "modified_at"}
-  assert files["L2/2024/L2_202406.nc"]["size"] == 19
-  assert files["L2/2024/L2_202406.nc"]["modified_at"] is not None
+  assert list(files) == ["L2_202406.nc", "L2_202501.nc", "L2_latest.nc"]
+  assert set(files["L2_202406.nc"]) == {"path", "size", "modified_at"}
+  assert files["L2_202406.nc"]["size"] == 19
+  assert files["L2_202406.nc"]["modified_at"] is not None
 
 
 async def test_without_patterns_every_file_is_listed(client, s3_endpoint):
-  response = await client.post("/sources/test", json=local_s3(s3_endpoint, "public"))
-  assert [entry["path"] for entry in response.json()["files"]] == ["L2/2024/L2_202406.nc", "L2/2025/L2_202501.nc", "L2/L2_latest.nc", "README.md"]
+  response = await client.post("/sources/test", json=local_s3(s3_endpoint, "public", path="flat/"))
+  assert [entry["path"] for entry in response.json()["files"]] == FLAT_FILES
 
 
 @pytest.mark.parametrize(
   ("include", "expected"),
   [
-    (["/L2/2024/*.nc", "/README.md"], ["L2/2024/L2_202406.nc", "README.md"]),  # several patterns
-    (["2024/*"], []),  # only at the top level: rclone doesn't look inside L2
-    (["**/2024/*"], ["L2/2024/L2_202406.nc"]),
-    (["{{L2_\\d+\\.nc}}"], ["L2/2024/L2_202406.nc", "L2/2025/L2_202501.nc"]),  # a regular expression
+    (["/L2_2024*.nc", "/README.md"], ["L2_202406.nc", "README.md"]),  # several patterns
+    (["*.md"], ["README.md"]),
+    (["{{L2_\\d+\\.nc}}"], ["L2_202406.nc", "L2_202501.nc"]),  # a regular expression
+    (["*.csv"], []),
   ],
 )
 async def test_include_patterns_are_applied_by_rclone(client, s3_endpoint, include, expected):
-  response = await client.post("/sources/test", json=local_s3(s3_endpoint, "public", include=include))
+  response = await client.post("/sources/test", json=local_s3(s3_endpoint, "public", path="flat", include=include))
   assert response.json()["ok"] is True
   assert [entry["path"] for entry in response.json()["files"]] == expected
+
+
+async def test_source_with_subfolders_fails_but_lists_its_files(client, s3_endpoint):
+  response = await client.post("/sources/test", json=local_s3(s3_endpoint, "public", path="L2"))
+  assert response.status_code == 200
+  assert response.json() == {
+    "ok": False,
+    "error": HAS_FOLDERS_IN_L2,
+    "files": [{"path": "L2_latest.nc", "size": 19, "modified_at": response.json()["files"][0]["modified_at"]}],
+    "truncated": False,
+  }
+
+
+@pytest.mark.parametrize("include", [["/*.csv"], ["L2_latest.nc"], ["2024/*.nc"]])
+async def test_subfolders_are_found_whatever_the_patterns(client, s3_endpoint, include):
+  response = await client.post("/sources/test", json=local_s3(s3_endpoint, "public", path="L2", include=include))
+  body = response.json()
+  assert body["ok"] is False
+  assert body["error"] == HAS_FOLDERS_IN_L2
+  assert [entry["path"] for entry in body["files"]] == (["L2_latest.nc"] if include == ["L2_latest.nc"] else [])
+
+
+async def test_many_subfolders_are_summarised(client, s3_endpoint, monkeypatch):
+  monkeypatch.setattr(rclone, "FOLDERS_SHOWN", 1)
+  response = await client.post("/sources/test", json=local_s3(s3_endpoint, "public", path="L2"))
+  assert response.json()["error"]["detail"].startswith("The source has 2 subfolders (2024/ and 1 more), but sources must be a single folder.")
+
+
+def test_one_subfolder_is_named():
+  listing = rclone.SourceListing()
+  listing.add({"Path": "2024", "IsDir": True})
+  assert listing.describe_folders() == "a subfolder (2024/)"
 
 
 @pytest.mark.parametrize(
@@ -224,11 +268,11 @@ async def test_private_bucket_is_reported(client, s3_endpoint):
 
 async def test_long_listing_is_truncated(client, s3_endpoint, monkeypatch):
   monkeypatch.setattr(rclone, "TEST_MAX_ENTRIES", 3)
-  response = await client.post("/sources/test", json=local_s3(s3_endpoint, "public"))
+  response = await client.post("/sources/test", json=local_s3(s3_endpoint, "public", path="flat"))
   body = response.json()
   assert body["ok"] is True
   assert body["truncated"] is True
-  assert len(body["files"]) == 3
+  assert [entry["path"] for entry in body["files"]] == FLAT_FILES[:3]
 
 
 async def test_unreachable_endpoint_is_reported(client, monkeypatch):
@@ -259,17 +303,16 @@ async def stored_source(session, dataset_id) -> Source | None:
 
 async def test_set_source(client, session, s3_endpoint):
   dataset = await add_dataset(session)
-  response = await client.put(f"/datasets/{dataset.id}/source", json=local_s3(s3_endpoint, "public", path="L2/", include=["*.nc"]))
+  response = await client.put(f"/datasets/{dataset.id}/source", json=local_s3(s3_endpoint, "public", path="flat/", include=["*.nc"]))
   assert response.status_code == 201
   body = response.json()
   assert body["dataset_id"] == dataset.id
   assert body["backend"] == "s3"
-  assert body["options"] == {"bucket": "public", "endpoint": s3_endpoint, "region": None}
-  assert body["path"] == "L2"
+  assert body["options"] == {"bucket": "public", "path": "flat", "endpoint": s3_endpoint, "region": None}
   assert body["include"] == ["*.nc"]
   assert body["last_tested_at"] is not None
   assert body["last_synced_at"] is None
-  assert set(body) == {"dataset_id", "backend", "options", "path", "include", "last_tested_at", "last_synced_at", "created_at", "updated_at"}
+  assert set(body) == {"dataset_id", "backend", "options", "include", "last_tested_at", "last_synced_at", "created_at", "updated_at"}
 
   await session.refresh(dataset)
   assert dataset.version == 2
@@ -277,11 +320,11 @@ async def test_set_source(client, session, s3_endpoint):
 
 async def test_replace_source(client, session, s3_endpoint):
   dataset = await add_dataset(session)
-  first = (await client.put(f"/datasets/{dataset.id}/source", json=local_s3(s3_endpoint, "public"))).json()
+  first = (await client.put(f"/datasets/{dataset.id}/source", json=local_s3(s3_endpoint, "public", path="flat"))).json()
   response = await client.put(f"/datasets/{dataset.id}/source", json=local_s3(s3_endpoint, "public", path="L2/2024"))
   assert response.status_code == 200
   body = response.json()
-  assert body["path"] == "L2/2024"
+  assert body["options"]["path"] == "L2/2024"
   assert body["created_at"] == first["created_at"]
   assert body["last_tested_at"] > first["last_tested_at"]
 
@@ -301,11 +344,13 @@ async def test_replace_source(client, session, s3_endpoint):
       },
     ),
     ("missing", {"detail": "Bucket missing does not exist", "code": "source_not_found"}),
+    ("public/L2", HAS_FOLDERS_IN_L2),
   ],
 )
-async def test_source_that_cant_be_read_is_not_saved(client, session, s3_endpoint, bucket, error):
+async def test_source_that_cant_be_used_is_not_saved(client, session, s3_endpoint, bucket, error):
   dataset = await add_dataset(session)
-  response = await client.put(f"/datasets/{dataset.id}/source", json=local_s3(s3_endpoint, bucket))
+  bucket, _, path = bucket.partition("/")
+  response = await client.put(f"/datasets/{dataset.id}/source", json=local_s3(s3_endpoint, bucket, path=path))
   assert response.status_code == 422
   assert response.json() == error
   assert await stored_source(session, dataset.id) is None
@@ -315,7 +360,7 @@ async def test_source_that_cant_be_read_is_not_saved(client, session, s3_endpoin
 
 async def test_failed_test_keeps_the_current_source(client, session, s3_endpoint):
   dataset = await add_dataset(session)
-  await client.put(f"/datasets/{dataset.id}/source", json=local_s3(s3_endpoint, "public"))
+  await client.put(f"/datasets/{dataset.id}/source", json=local_s3(s3_endpoint, "public", path="flat"))
   response = await client.put(f"/datasets/{dataset.id}/source", json=local_s3(s3_endpoint, "private"))
   assert response.status_code == 422
   source = await stored_source(session, dataset.id)
@@ -370,8 +415,7 @@ async def add_source(session, dataset_id) -> Source:
   source = Source(
     dataset_id=dataset_id,
     backend=SourceBackend.s3,
-    options={"bucket": "eawag-lexplore"},
-    path="L2",
+    options={"bucket": "eawag-lexplore", "path": "L2"},
     include=["*.nc"],
     last_tested_at=datetime.now(UTC),
   )
@@ -389,8 +433,7 @@ async def test_get_source(client, session):
   body = response.json()
   assert body["dataset_id"] == dataset.id
   assert body["backend"] == "s3"
-  assert body["options"] == {"bucket": "eawag-lexplore"}
-  assert body["path"] == "L2"
+  assert body["options"] == {"bucket": "eawag-lexplore", "path": "L2"}
   assert body["include"] == ["*.nc"]
   assert body["last_synced_at"] is None
 

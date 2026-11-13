@@ -110,6 +110,8 @@ async def fetch_dataset(dataset_id: int, session: SessionDep):
 
   1. Lists the source and compares it with the file index. A file is **new** if the index doesn't have it, **changed** if its size
      or modified time differs or it's missing from the archive, and **removed** if it's no longer in the source.
+     Only the files directly in the source's folder count: if subfolders have appeared since the source was set, the files in them
+     are skipped and the log has a warning naming the subfolders. The job doesn't fail because of them.
   2. Copies new and changed files into the dataset's archive, replacing the old copy of a changed file. Removed files are deleted from
      the archive and from the index. New and changed files are marked `new` in the index.
 
@@ -125,7 +127,7 @@ async def fetch_dataset(dataset_id: int, session: SessionDep):
   return await queue_dataset_job(session, dataset_id, JobType.fetch)
 
 
-INSPECTED_FILE_EXAMPLE = "2024/L2_ThermistorChain_202406.nc"
+INSPECTED_FILE_EXAMPLE = "L2_ThermistorChain_202406.nc"
 
 
 @router.post(

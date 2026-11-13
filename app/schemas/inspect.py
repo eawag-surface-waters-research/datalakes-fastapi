@@ -7,5 +7,5 @@ class InspectRequest(BaseModel):
   file: str = Field(
     min_length=1,
     description="Path of a file in the dataset's archive, as listed by `GET /datasets/{dataset_id}/files`. Only NetCDF files (`.nc`) are supported.",
-    examples=["2024/L2_ThermistorChain_202406.nc"],
+    examples=["L2_ThermistorChain_202406.nc"],
   )

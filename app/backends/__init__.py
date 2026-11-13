@@ -49,7 +49,7 @@ def source_type(backend: type[Backend]) -> SourceType:
     for name, field in backend.model_fields.items()
   ]
   info = backend.info
-  return SourceType(backend=info.id, name=info.name, description=info.description, path_description=info.path_description, options=options)
+  return SourceType(backend=info.id, name=info.name, description=info.description, options=options)
 
 
 SOURCE_TYPES: list[SourceType] = [source_type(backend) for backend in BACKENDS]

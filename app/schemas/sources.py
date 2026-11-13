@@ -15,7 +15,6 @@ from app.sql import enum_type
 class SourceBase(SQLModel):
   backend: SourceBackend = Field(sa_type=enum_type(SourceBackend, "source_backend"))
   options: dict[str, Any] = Field(sa_type=JSONB)
-  path: str = Field(default="", sa_column_kwargs={"server_default": ""})
   include: list[str] = Field(default_factory=list, sa_type=ARRAY(sa.String), sa_column_kwargs={"server_default": "{}"})
 
 
@@ -32,7 +31,9 @@ class SourceRead(SourceBase):
 class SourceEntry(BaseModel):
   """A file in a source."""
 
-  path: str = PydanticField(description="Path relative to the source's `path`, with its folders.", examples=["2024/L2_ThermistorChain_202406.nc"])
+  path: str = PydanticField(
+    description="Name of the file. Sources are a single folder, so this is the path relative to it.", examples=["L2_ThermistorChain_202406.nc"]
+  )
   size: int = PydanticField(description="Size in bytes.")
   modified_at: datetime | None = PydanticField(description="When the file last changed in the source. `null` when the backend doesn't report it.")
 
@@ -40,11 +41,12 @@ class SourceEntry(BaseModel):
 class SourceTestResult(BaseModel):
   """The result of testing a source."""
 
-  ok: bool = PydanticField(description="Whether the source could be listed anonymously.")
-  error: ErrorResponse | None = PydanticField(description=("Why the source couldn't be read, or `null`."))
+  ok: bool = PydanticField(description="Whether the source could be listed anonymously and has no subfolders.")
+  error: ErrorResponse | None = PydanticField(description="Why the source can't be used, or `null`.")
   files: list[SourceEntry] = PydanticField(
     description=(
-      "The first files the source's `include` patterns select, up to 100, including those in subfolders. These are the files a sync would fetch."
+      "The first files directly in the source's folder that its `include` patterns select, up to 100. These are the files a sync would fetch. "
+      "Also listed when the source has subfolders (`source_has_folders`)."
     )
   )
   truncated: bool = PydanticField(description="`true` when there are more than 100 files.")
@@ -65,5 +67,4 @@ class SourceType(BaseModel):
   backend: SourceBackend
   name: str
   description: str
-  path_description: str = Field(description="What `path` means for this backend.")
   options: list[SourceTypeOption] = Field(description="The options accepted in a source's `options`.")
