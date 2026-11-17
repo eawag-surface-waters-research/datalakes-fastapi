@@ -1954,7 +1954,7 @@ paths:
                 unreadable_file:
                   summary: The file can't be read
                   value:
-                    detail: "README.md is not a NetCDF or HDF5 file. Only those formats are supported."
+                    detail: "File 'README.md' is not a NetCDF file (.nc). Only NetCDF is supported."
                     code: unreadable_file
         "504":
           description: Reading the file took longer than 10 s.
@@ -3703,30 +3703,94 @@ components:
       properties:
         file:
           type: string
-          description: Path of a file in the dataset's archive, as listed by `GET /datasets/{dataset_id}/files`. NetCDF and HDF5 files are supported.
+          description: Path of a file in the dataset's archive, as listed by `GET /datasets/{dataset_id}/files`. Only NetCDF files (`.nc`) are supported.
           examples: [L2_ThermistorChain_202406.nc]
+
+    SampleSummary:
+      type: object
+      description: What the sample of a variable's values looks like. Only part of a large variable is read, so this can miss rare values.
+      required: [count, missing, min, max]
+      properties:
+        count:
+          type: integer
+          description: Number of values read.
+          examples: [100000]
+        missing:
+          type: integer
+          description: Values that are NaN, a declared fill value, or a placeholder found by inspect.
+          examples: [312]
+        min:
+          type: [number, "null"]
+          description: Smallest valid value, or `null` if there is none or the values aren't numeric.
+          examples: [4.81]
+        max:
+          type: [number, "null"]
+          description: Largest valid value, or `null` if there is none or the values aren't numeric.
+          examples: [24.37]
 
     InspectedVariable:
       description: A suggested variable, ready to send to `POST /datasets/{dataset_id}/variables`, with what was found in the file.
       allOf:
         - $ref: "#/components/schemas/VariableCreate"
         - type: object
-          required: [shape, attributes]
+          required: [shape, attributes, sample]
           properties:
             shape:
               type: array
-              description: Size of each dimension in the sample file.
+              description: Size of each dimension in the inspected file.
               items:
                 type: integer
               examples: [[4320, 32]]
             attributes:
               type: object
-              description: The variable's attributes in the file, e.g. `units`, `long_name` and `standard_name`.
+              description: The variable's attributes in the file, e.g. `units`, `long_name` and `standard_name`. NaN and infinite values are `null`.
+            sample:
+              $ref: "#/components/schemas/SampleSummary"
+
+    InspectedTimeRange:
+      type: object
+      description: The time covered by the file, decoded from the time variable's CF units.
+      required: [start, end, count, units, calendar]
+      properties:
+        start:
+          type: string
+          format: date-time
+        end:
+          type: string
+          format: date-time
+        count:
+          type: integer
+          description: Number of time values in the file.
+        units:
+          type: string
+          examples: ["seconds since 1970-01-01 00:00:00"]
+        calendar:
+          type: [string, "null"]
+          description: The time variable's `calendar`, or `null` for the default (`standard`).
+
+    ScalarVariable:
+      type: object
+      description: A variable without a dimension, e.g. the depth of a mooring sensor. It can't become a variable, but tells where or when the data is from.
+      required: [source_name, value, unit, axis]
+      properties:
+        source_name:
+          type: string
+          examples: [depth]
+        value:
+          description: The variable's value.
+          examples: [1000]
+        unit:
+          type: [string, "null"]
+          examples: [cm]
+        axis:
+          description: What the variable describes, or `null` if it's none of these.
+          enum: [time, vertical, latitude, longitude, null]
+          examples: [vertical]
 
     InspectResult:
       type: object
       description: "The response of inspect. Nothing is saved: the suggestions are meant to be reviewed before the variables are created."
-      required: [file, format, feature_type, variables, location, global_attributes, warnings]
+      required: [file, format, dimensions, feature_type, feature_type_reason, time_range, location, variables, scalars, global_attributes, warnings]
       properties:
         file:
           type: string
@@ -3735,18 +3799,38 @@ components:
           type: string
           enum: [netcdf3, netcdf4]
           description: File format. `netcdf4` also covers HDF5.
+        dimensions:
+          type: object
+          description: The file's dimensions and their sizes.
+          additionalProperties:
+            type: integer
+          examples: [{ time: 4320, depth: 32 }]
         feature_type:
           description: The suggested feature type, or `null` if it couldn't be guessed.
           anyOf:
             - $ref: "#/components/schemas/FeatureTypeName"
             - type: "null"
+        feature_type_reason:
+          type: string
+          description: Why this feature type was suggested.
+          examples: ["data on time and a vertical dimension: temp"]
+        time_range:
+          description: The time covered by the file, or `null` if it has no time variable with CF units.
+          anyOf:
+            - $ref: "#/components/schemas/InspectedTimeRange"
+            - type: "null"
         variables:
           type: array
-          description: Suggested variables, coordinates first. `parameter_id` is a guess from the variable's name and attributes.
+          description: Suggested variables, time and coordinates first. `parameter_id` is a guess from the variable's name and attributes.
           items:
             $ref: "#/components/schemas/InspectedVariable"
+        scalars:
+          type: array
+          description: Variables without a dimension. They aren't suggested as variables.
+          items:
+            $ref: "#/components/schemas/ScalarVariable"
         location:
-          description: Where the data is from, when the file gives it in its global attributes instead of as variables.
+          description: Where the data is from, when the file gives it as scalar variables or global attributes instead of as variables along a dimension.
           anyOf:
             - type: object
               required: [latitude, longitude]
@@ -3758,10 +3842,10 @@ components:
             - type: "null"
         global_attributes:
           type: object
-          description: The file's global attributes.
+          description: The file's global attributes. NaN and infinite values are `null`.
         warnings:
           type: array
-          description: Things to check before saving, e.g. guesses about time units or missing values.
+          description: Things to check before saving, e.g. missing time units, placeholders for missing values or odd units. Problems that would fail the build start with their error code, e.g. `invalid_time_units`.
           items:
             type: string
 
@@ -6117,7 +6201,18 @@ components:
       value:
         file: L2_ThermistorChain_202406.nc
         format: netcdf4
+        dimensions: { time: 4320, depth: 32 }
         feature_type: timeSeriesProfile
+        feature_type_reason: "data on time and a vertical dimension: temp"
+        time_range:
+          start: "2024-06-01T00:00:00Z"
+          end: "2024-06-30T23:50:00Z"
+          count: 4320
+          units: seconds since 1970-01-01 00:00:00
+          calendar: null
+        location:
+          latitude: 46.5004
+          longitude: 6.6588
         variables:
           - name: time
             source_name: time
@@ -6125,54 +6220,70 @@ components:
             dimensions: [time]
             unit: null
             parameter_id: 1
+            sensor_id: null
+            flag_for: null
+            description: time
+            decoding: null
             shape: [4320]
             attributes:
+              units: seconds since 1970-01-01 00:00:00
               long_name: time
+            sample: { count: 4320, missing: 0, min: 1717200000, max: 1719791400 }
           - name: depth
             source_name: depth
             role: coordinate
             dimensions: [depth]
             unit: m
             parameter_id: 2
+            sensor_id: null
+            flag_for: null
+            description: depth
+            decoding: null
             shape: [32]
             attributes:
               units: m
               long_name: depth
-          - name: temperature
+            sample: { count: 32, missing: 0, min: 0.5, max: 16 }
+          - name: temp
             source_name: temp
             role: data
             dimensions: [time, depth]
             unit: degC
             parameter_id: 5
+            sensor_id: null
+            flag_for: null
+            description: Water temperature
             decoding:
               missing_values: [-9999]
             shape: [4320, 32]
             attributes:
               units: degC
               long_name: Water temperature
-          - name: temperature_qual
+            sample: { count: 34560, missing: 97, min: 8.83, max: 23.07 }
+          - name: temp_qual
             source_name: temp_qual
             role: flag
             dimensions: [time, depth]
             unit: null
             parameter_id: 27
-            flag_for: temperature
+            sensor_id: null
+            flag_for: temp
+            description: Quality flag for temp
+            decoding: null
             shape: [4320, 32]
             attributes:
               long_name: Quality flag for temp
-              flag_values: "0, 1"
-        location:
-          latitude: 46.5004
-          longitude: 6.6588
+              flag_values: [0, 1]
+              flag_meanings: good bad
+            sample: { count: 34560, missing: 0, min: 0, max: 0 }
+        scalars: []
         global_attributes:
           title: LéXPLORE thermistor chain
           institution: Eawag
           latitude: 46.5004
           longitude: 6.6588
         warnings:
-          - "time has no units attribute, so files like this one fail to build with invalid_time_units. Its values (1717200000 to 1719791400) look like seconds since 1970, i.e. June 2024: add units = 'seconds since 1970-01-01 00:00:00' to the time variable in the files."
-          - "temp contains -9999, which looks like a missing value: added to missing_values."
-          - The file has no latitude or longitude variable, so the location comes from the global attributes.
+          - "temp: placeholder values found in the sample, suggested decoding {'missing_values': [-9999]}."
 
     TimeSeriesData:
       summary: A weather station (timeSeries)
