@@ -1963,7 +1963,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
               example:
-                detail: Reading L2_ThermistorChain_202406.nc took longer than 10 s
+                detail: "Reading 'L2_ThermistorChain_202406.nc' took longer than 10 s"
                 code: inspect_timeout
 
   /datasets/{dataset_id}/fetch:

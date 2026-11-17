@@ -1,12 +1,16 @@
+import asyncio
+
 from fastapi import APIRouter
 from sqlmodel import col, select
 
+from app import inspection
 from app.database import SessionDep
 from app.enums import DatasetKind, JobStatus, JobType
 from app.errors import ApiError, ErrorResponse, not_found
-from app.models import Dataset, File, Job, Source
+from app.models import Dataset, File, Job, Parameter, Source
 from app.routes.jobs import QUEUED_JOB_EXAMPLE
 from app.schemas import InspectRequest, JobRead
+from app.schemas.inspect import InspectResult
 from app.storage import raw_dir
 from app.worker.queue import enqueue
 
@@ -128,6 +132,7 @@ async def fetch_dataset(dataset_id: int, session: SessionDep):
 
 
 INSPECTED_FILE_EXAMPLE = "L2_ThermistorChain_202406.nc"
+INSPECT_TIMEOUT = 10.0  # seconds reading a file may take
 
 
 @router.post(
@@ -162,19 +167,25 @@ INSPECTED_FILE_EXAMPLE = "L2_ThermistorChain_202406.nc"
         }
       },
     },
-    501: {
+    504: {
       "model": ErrorResponse,
-      "description": "Reading the file isn't implemented yet. The checks above already apply.",
-      "content": {"application/json": {"example": {"detail": "Inspecting files is not implemented yet", "code": "not_implemented"}}},
+      "description": f"Reading the file took longer than {INSPECT_TIMEOUT:g} s.",
+      "content": {
+        "application/json": {
+          "example": {"detail": f"Reading '{INSPECTED_FILE_EXAMPLE}' took longer than {INSPECT_TIMEOUT:g} s", "code": "inspect_timeout"}
+        }
+      },
     },
   },
 )
-async def inspect_file(dataset_id: int, request: InspectRequest, session: SessionDep):
+async def inspect_file(dataset_id: int, request: InspectRequest, session: SessionDep) -> InspectResult:
   """
   Reads one file from the dataset's archive and suggests the dataset's variables and feature type, in the response.
-  Fetch the dataset first, so that the file is in the archive, and pick it from `GET /datasets/{dataset_id}/files`.
+  Only the file's metadata and a sample of its values are read. Fetch the dataset first, so that the file is in the archive,
+  and pick it from `GET /datasets/{dataset_id}/files`.
 
-  The suggestions are not saved. Review them, then create the variables.
+  The suggestions are not saved. Review them, then create the variables. `warnings` lists what to check first,
+  e.g. time without CF units, placeholders for missing values or units spelled differently.
 
   While a fetch, sync or rebuild of the dataset is queued or running, this returns 409 with the job's ID, as the job may change the archive.
 
@@ -188,9 +199,17 @@ async def inspect_file(dataset_id: int, request: InspectRequest, session: Sessio
 
   # check if the file is in the index before trying to read it
   indexed = (await session.exec(select(File.id).where(File.dataset_id == dataset_id, File.path == request.file))).first()
-  if indexed is None or not (raw_dir(dataset_id) / request.file).is_file():
+  path = raw_dir(dataset_id) / request.file
+  if indexed is None or not path.is_file():
     raise ApiError(422, "file_not_in_archive", f"File {request.file!r} is not in the archive of dataset {dataset_id}. Fetch the dataset first.")
-  if not request.file.lower().endswith(".nc"):
-    raise ApiError(422, "unreadable_file", f"File {request.file!r} is not a NetCDF file (.nc). Only NetCDF is supported.")
 
-  raise ApiError(501, "not_implemented", "Inspecting files is not implemented yet")
+  # run in a separate thread to avoid blocking the event loop
+  try:
+    async with asyncio.timeout(INSPECT_TIMEOUT):
+      result = await asyncio.to_thread(inspection.inspect_file, path)
+  except TimeoutError:
+    raise ApiError(504, "inspect_timeout", f"Reading {request.file!r} took longer than {INSPECT_TIMEOUT:g} s") from None
+
+  parameters = (await session.exec(select(Parameter))).all()
+  inspection.guess_parameters(result, parameters)
+  return result

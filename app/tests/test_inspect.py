@@ -1,10 +1,12 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+import numpy as np
 import pytest
+import xarray as xr
 
 from app.enums import DatasetKind, JobStatus, JobType, SourceBackend
-from app.models import Dataset, File, Job, Source
+from app.models import Dataset, File, Job, Parameter, Source
 
 T0 = datetime(2024, 9, 1, tzinfo=UTC)
 FILE = "2024/L2_ThermistorChain_202406.nc"
@@ -27,13 +29,30 @@ async def add_dataset(session, kind=DatasetKind.data, with_source=True, **values
   return dataset
 
 
-async def add_file(session, filesystem: Path, dataset_id: int, path: str, on_disk=True) -> None:
+def thermistor_chain() -> xr.Dataset:
+  """A small thermistor chain file: temperature over time and depth, with a -9999 placeholder and the location in the global attributes."""
+  temp = np.array([[10.5, 9.0], [-9999, 9.1], [11.0, 9.2]])
+  return xr.Dataset(
+    {"temp": (("time", "depth"), temp, {"units": "degC", "long_name": "Water temperature"})},
+    coords={
+      "time": ("time", [1_717_200_000.0, 1_717_200_600.0, 1_717_201_200.0], {"units": "seconds since 1970-01-01 00:00:00"}),
+      "depth": ("depth", [0.5, 1.0], {"units": "m"}),
+    },
+    attrs={"title": "Thermistor chain", "latitude": 46.5, "longitude": 6.66},
+  )
+
+
+async def add_file(session, filesystem: Path, dataset_id: int, path: str, on_disk=True, content: bytes | None = None) -> None:
+  """Indexes a file and puts it in the archive: the thermistor chain file, or `content` if given."""
   session.add(File(dataset_id=dataset_id, path=path, size=4, modified_at=T0))
   await session.commit()
   if on_disk:
     archived = filesystem / "raw" / str(dataset_id) / path
     archived.parent.mkdir(parents=True, exist_ok=True)
-    archived.write_bytes(b"CDF\x01")
+    if content is None:
+      thermistor_chain().to_netcdf(archived, engine="netcdf4")
+    else:
+      archived.write_bytes(content)
 
 
 async def add_job(session, dataset_id: int, type: JobType, status: JobStatus) -> Job:
@@ -44,11 +63,50 @@ async def add_job(session, dataset_id: int, type: JobType, status: JobStatus) ->
   return job
 
 
-async def test_inspect_extension_is_case_insensitive(client, session, filesystem):
+async def test_inspect_file(client, session, filesystem):
   dataset = await add_dataset(session)
-  await add_file(session, filesystem, dataset.id, "2024/DATA.NC")
-  response = await client.post(f"/datasets/{dataset.id}/inspect", json={"file": "2024/DATA.NC"})
-  assert response.status_code == 501
+  await add_file(session, filesystem, dataset.id, FILE)
+  session.add_all([Parameter(id=1, name="Time", cf_name="time"), Parameter(id=5, name="Water temperature", cf_name="water_temperature")])
+  await session.commit()
+  response = await client.post(f"/datasets/{dataset.id}/inspect", json={"file": FILE})
+  assert response.status_code == 200
+  body = response.json()
+  assert body["file"] == "L2_ThermistorChain_202406.nc"
+  assert body["format"] == "netcdf4"
+  assert body["dimensions"] == {"time": 3, "depth": 2}
+  assert body["feature_type"] == "timeSeriesProfile"
+  assert body["time_range"]["start"] == "2024-06-01T00:00:00Z"
+  assert body["location"] == {"latitude": 46.5, "longitude": 6.66}
+  assert body["global_attributes"] == {"title": "Thermistor chain", "latitude": 46.5, "longitude": 6.66}
+  assert [(v["name"], v["role"], v["parameter_id"]) for v in body["variables"]] == [
+    ("time", "time", 1),
+    ("depth", "coordinate", None),
+    ("temp", "data", 5),
+  ]
+  temp = body["variables"][2]
+  assert temp["dimensions"] == ["time", "depth"]
+  assert temp["unit"] == "degC"
+  assert temp["decoding"] == {"missing_values": [-9999]}
+  assert temp["shape"] == [3, 2]
+  assert temp["sample"] == {"count": 6, "missing": 1, "min": 9.0, "max": 11.0}
+  assert body["warnings"] == ["temp: placeholder values found in the sample, suggested decoding {'missing_values': [-9999]}."]
+
+
+async def test_inspect_file_that_is_not_netcdf(client, session, filesystem):
+  dataset = await add_dataset(session)
+  await add_file(session, filesystem, dataset.id, "README.md", content=b"# Thermistor chain")
+  response = await client.post(f"/datasets/{dataset.id}/inspect", json={"file": "README.md"})
+  assert response.status_code == 422
+  assert response.json() == {"detail": "File 'README.md' is not a NetCDF file (.nc). Only NetCDF is supported.", "code": "unreadable_file"}
+
+
+async def test_inspect_broken_netcdf_file(client, session, filesystem):
+  dataset = await add_dataset(session)
+  await add_file(session, filesystem, dataset.id, FILE, content=b"CDF\x01")
+  response = await client.post(f"/datasets/{dataset.id}/inspect", json={"file": FILE})
+  assert response.status_code == 422
+  assert response.json()["code"] == "unreadable_file"
+  assert response.json()["detail"].startswith("File 'L2_ThermistorChain_202406.nc' can't be read as NetCDF")
 
 
 async def test_inspect_unknown_dataset(client):
