@@ -1,0 +1,12 @@
+[
+  {
+    "id": 1,
+    "name": "Lake Geneva",
+    "type": "lake",
+    "properties": {
+      "elevation": 372.0,
+      "max_depth": 309.0,
+      "morphology": true
+    }
+  }
+]

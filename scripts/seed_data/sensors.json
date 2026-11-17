@@ -1,0 +1,93 @@
+[
+  {
+    "id": 1,
+    "name": "Sensor Type NA",
+    "manufacturer": "Example Manufacturer",
+    "accuracy": "+/- 5",
+    "link": "https://en.wikipedia.org/wiki/Sensor"
+  },
+  {
+    "id": 5,
+    "name": "Minilog-II-T",
+    "manufacturer": "Vemco",
+    "accuracy": "0.1 °C",
+    "link": "https://www.bodc.ac.uk/data/documents/nodb/pdf/minilog2t.pdf"
+  },
+  {
+    "id": 6,
+    "name": "TidBit MX2203",
+    "manufacturer": "Onset",
+    "accuracy": "0.2",
+    "link": null
+  },
+  {
+    "id": 7,
+    "name": "TidBit MX2203 calibrated",
+    "manufacturer": "Onset (calibrated by Eawag)",
+    "accuracy": "0.05",
+    "link": null
+  },
+  {
+    "id": 8,
+    "name": "Calculated",
+    "manufacturer": "-",
+    "accuracy": "-",
+    "link": null
+  },
+  {
+    "id": 9,
+    "name": "miniDOT",
+    "manufacturer": "PME",
+    "accuracy": "5 %",
+    "link": null
+  },
+  {
+    "id": 10,
+    "name": "DO Solo",
+    "manufacturer": "RBR",
+    "accuracy": "2 %",
+    "link": null
+  },
+  {
+    "id": 11,
+    "name": "RBR Solo DO",
+    "manufacturer": "RBR",
+    "accuracy": "2 %",
+    "link": null
+  },
+  {
+    "id": 12,
+    "name": "RBR CTD",
+    "manufacturer": "RBR",
+    "accuracy": "0.002 °C, 0.003 mS/cm, 2% DO",
+    "link": "https://rbr-global.com/products/standard-loggers/rbrduo-ct/"
+  },
+  {
+    "id": 13,
+    "name": "RBR Solo-T",
+    "manufacturer": "RBR global",
+    "accuracy": "0.005",
+    "link": null
+  },
+  {
+    "id": 14,
+    "name": "RBR Duet",
+    "manufacturer": "RBR global",
+    "accuracy": null,
+    "link": null
+  },
+  {
+    "id": 15,
+    "name": "Exo3",
+    "manufacturer": "YSI",
+    "accuracy": null,
+    "link": null
+  },
+  {
+    "id": 16,
+    "name": "NexSens",
+    "manufacturer": "NexSens",
+    "accuracy": "0.075",
+    "link": null
+  }
+]

@@ -1,0 +1,12 @@
+[
+  {
+    "id": 1,
+    "name": "Eawag",
+    "link": "https://www.eawag.ch/"
+  },
+  {
+    "id": 2,
+    "name": "EPFL",
+    "link": "https://www.epfl.ch/en/"
+  }
+]
