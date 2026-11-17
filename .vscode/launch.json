@@ -19,6 +19,16 @@
       "console": "integratedTerminal",
       "justMyCode": true,
       "args": ["--worker"]
+    },
+    {
+      "name": "Debug netcdf inspector",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "scripts.inspect_netcdf",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "args": ["/home/david/switchdrive-rclone/cantonal-ctd-profiles-main/data/Level2/LakeMurten/L2_LakeMurten_19990120_120000.nc"]
     }
   ]
 }
