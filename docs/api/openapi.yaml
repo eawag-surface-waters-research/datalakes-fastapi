@@ -3821,7 +3821,10 @@ components:
             - type: "null"
         variables:
           type: array
-          description: Suggested variables, time and coordinates first. `parameter_id` is a guess from the variable's name and attributes.
+          description: |
+            Suggested variables, time and coordinates first.
+
+            `parameter_id` is a guess from the `parameters` vocabulary. The first of these that matches decides. If several parameters match, `parameter_id` is `null` and a warning names them.
           items:
             $ref: "#/components/schemas/InspectedVariable"
         scalars:
@@ -6265,7 +6268,7 @@ components:
             role: flag
             dimensions: [time, depth]
             unit: null
-            parameter_id: 27
+            parameter_id: null
             sensor_id: null
             flag_for: temp
             description: Quality flag for temp
