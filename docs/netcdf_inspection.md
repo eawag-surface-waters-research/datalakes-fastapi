@@ -1,9 +1,23 @@
-# NetCDF Inspection Script
+# NetCDF inspection
+
+Inspection reads one NetCDF file and suggests the dataset's feature type and variables, with warnings for anything the build would reject or that needs a decision.
+
+| Where                                                                                 | What                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`app/inspection.py`](../app/inspection.py)                                           | The rules below. `inspect_file(path)` reads the file, `guess_parameters(result, parameters)` fills in `parameter_id`.                                                                                                                                 |
+| `POST /datasets/{dataset_id}/inspect` ([`app/routes/sync.py`](../app/routes/sync.py)) | Checks that the file is in the dataset's archive, reads it in a thread with a 10 s limit (504 `inspect_timeout`), and guesses parameters from the `parameters` table. The response is `InspectResult` in [`docs/api/openapi.yaml`](api/openapi.yaml). |
+| [`scripts/inspect_netcdf.py`](../scripts/inspect_netcdf.py)                           | The same for a local file, without a database. Parameters are guessed from `scripts/seed_data/parameters.json`.                                                                                                                                       |
+
+```console
+uv run python -m scripts.inspect_netcdf path/to/file.nc            # readable report
+uv run python -m scripts.inspect_netcdf path/to/file.nc --json     # what the endpoint returns
+uv run python -m scripts.inspect_netcdf path/to/file.nc --parameters ""   # without guessing parameters
+```
 
 ```mermaid
 flowchart TD
   A["inspect_file(path)"] --> B{"ends with .nc?"}
-  B -- no --> E1["InspectError: unreadable_file"]
+  B -- no --> E1["ApiError 422 unreadable_file"]
   B -- yes --> C["xr.open_dataset<br/>(no decoding of time, scale or fill values)"]
   C -- fails --> E1
   C -- ok --> L
@@ -20,14 +34,14 @@ flowchart TD
     V7 --> V9
     V8 --> V9["_unit: units string<br/>(warn if it's a list)"]
     V9 --> V10{"flag with meanings<br/>in units?"}
-    V10 -- yes --> V11["unit = none, meanings go to hints"]
+    V10 -- yes --> V11["unit = none<br/>(the meanings stay in attributes)"]
     V10 -- no --> V12
     V11 --> V12["_suggest_name and add the suggestion"]
   end
 
   L --> F1["_link_flags: set flag_for<br/>(ancillary_variables, else temp_qual → temp)"]
   F1 --> F2["_check_unit_spelling: mg/l vs mg/L"]
-  F2 --> F3["warn: dimension without coordinate,<br/>no time variable"]
+  F2 --> F3["warn: dimension without coordinate,<br/>no time variable or no ISO 8601 time attribute"]
   F3 --> F4["_feature_type"]
 
   subgraph FT ["_feature_type, first match wins"]
@@ -47,9 +61,10 @@ flowchart TD
 
   F4 --> FT
   FT --> F5["time order warning<br/>(skipped for profiles)"]
-  F5 --> F6["_from_attributes: latitude, longitude, altitude,<br/>depth, max_depth, time from global attributes"]
+  F5 --> F6["_location: latitude and longitude from<br/>scalar variables or global attributes"]
   F6 --> F7["warn if no latitude and longitude"]
-  F7 --> OUT["result: feature type, time range, location,<br/>scalars, variables, warnings"]
+  F7 --> OUT["InspectResult: time and coordinates first"]
+  OUT --> G["guess_parameters (endpoint and script):<br/>parameter_id from the vocabulary"]
 ```
 
 ## How the file is read
@@ -57,6 +72,7 @@ flowchart TD
 1. Only `.nc` files are accepted. Anything else or a file that can't be opened results in an `unreadable_file` error.
 2. The file is opened with xarray without decoding (`decode_times=False`, `mask_and_scale=False`), so the raw values and attributes are visible.
 3. Every variable is read as a sample of at most about 100,000 values, evenly spaced over all dimensions. Smaller variables are read whole.
+4. Variables without a dimension (scalars, e.g. `depth = 1000 cm` on a mooring) are returned in `scalars` but not suggested, because a variable needs at least one dimension.
 
 ## Rules
 
@@ -81,7 +97,6 @@ Every variable gets one of the four roles of the `variables` table. They're chec
 3. **coordinate**: any other axis, a dimension coordinate (`depth(depth)`), or listed in the file's coordinates.
 4. **data**: everything else.
 
-
 ### Suggested fields
 
 Each variable that has at least one dimension becomes a suggestion with the fields of a variable. `source_name` is always the exact name in the file, so the build can find it again. The other fields are filled as follows:
@@ -93,15 +108,25 @@ Each variable that has at least one dimension becomes a suggestion with the fiel
 | `description`  | `long_name`                                                                                                                                                                 |
 | `flag_for`     | The data variable a flag belongs to: from the data variable's CF `ancillary_variables`, otherwise by name (`temp_qual` → `temp`). Flags on `time` or `depth` aren't linked. |
 | `decoding`     | See below. Never set for time.                                                                                                                                              |
-| `parameter_id` | Not guessed yet (needs the vocabulary); `standard_name` and `long_name` are returned as hints.                                                                              |
+| `parameter_id` | Guessed from the `parameters` vocabulary, see below.                                                                                                                        |
+
+### Parameter (`parameter_id`)
+
+The `parameters` vocabulary is searched in this order, and the first step that matches anything decides:
+
+1. the variable's `standard_name` against the parameters' `cf_name`,
+2. its `long_name` against the parameters' name or `cf_name`,
+3. its name in the file against the parameters' name or `cf_name`.
+
+Names are compared without case, spaces or punctuation, so `Water Temperature` matches `water_temperature`. If several parameters match, none is set and a warning names them
 
 ### Missing values (`decoding`)
 
 Many older files mark missing values with a placeholder instead of NaN or a declared `_FillValue`. If these aren't removed, a `-9999` ends up in a plot as a real temperature. The suggested `decoding` tells the build which values to turn into NaN, so all stored data uses one convention.
 
-Values declared as `_FillValue` or `missing_value`, and NaN, are already missing. In the sample, the script also looks for:
+Values declared as `_FillValue` or `missing_value`, and NaN, are already missing. In the sample, inspection also looks for:
 
-- `-9999`, `-999` or `-99999`
+- `-9999`, `-999` or `-99999` → `"missing_values": [...]`
 - values above `1e31`, including `inf` and the NetCDF default fill (9.97e36) → `"valid_max": 1e31`
 - non-zero values smaller than `1e-20` (e.g. `-9.99e-29`) → a warning only, since they might be real
 
@@ -118,18 +143,14 @@ The feature type describes the shape of the whole dataset and decides how the AP
 5. **profile**: data on a vertical dimension without time.
 6. Otherwise no suggestion.
 
-
 ### Time
 
 Time is the axis every dataset is queried and partitioned by, so it gets the strictest checks.
 
 - Time must have CF units (`seconds since 1970-01-01 00:00:00`). Without them, the warning is `invalid_time_units` and the build will reject the file. The warning says how the old API would have guessed: values below 31,536,000 as MATLAB datenums, otherwise as unix seconds.
-- The first and last time are decoded from the units and `calendar`.
+- The first and last time are decoded from the units and `calendar` and returned in `time_range`.
 - In a time series, repeated or decreasing times are reported. In a cast they're normal and ignored.
-
-### Global attributes
-
-Many files store the location only in global attributes, not as variables. When no variable has them, these global attributes are read (case-insensitive): `latitude`/`lat`, `longitude`/`lon`/`long`/`lng`, `altitude`/`elevation`, `depth`, `max_depth`, and time from `time`, `datetime`, `date`, `start_time` or `time_coverage_start` (must be ISO 8601). They're returned for the dataset's metadata, not as variables. If no latitude and longitude are found anywhere, the location has to be set by hand.
+- A file without a time variable needs its time in a global attribute (`time`, `datetime`, `date`, `start_time` or `time_coverage_start`) as an ISO 8601 string. Otherwise there's a warning.
 
 ### Other warnings
 
@@ -141,7 +162,8 @@ These don't change the suggestion, but point at something to fix in the file or 
 - a variable with no valid values in the sample
 - non-numeric values
 - a dimension without a coordinate variable
-- a dimension that is neither time nor depth (e.g. `wavelength`); the storage layout only covers time and depth
+- a dimension that is neither time nor depth (e.g. `wavelength`); only time and depth are supported
+- several parameters matching one variable
 - no latitude and longitude anywhere in the file
 
 ## Best practices for NetCDF files

@@ -5,7 +5,7 @@ Only metadata and a bounded, evenly spaced sample of values are read.
 Nothing is saved.
 The rules are heuristics on names, attributes and dimensions.
 Anything they can't decide becomes a warning.
-See `docs/netcdp_inspection.md` for the rules.
+See `docs/netcdf_inspection.md` for the rules.
 """
 
 import math
