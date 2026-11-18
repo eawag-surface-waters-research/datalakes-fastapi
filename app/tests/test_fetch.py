@@ -74,9 +74,10 @@ async def add_dataset(engine: AsyncEngine, bucket: Bucket | None, include: list[
     return dataset.id
 
 
-async def fetch(engine: AsyncEngine, make_worker, dataset_id: int) -> Job:
+async def fetch(engine: AsyncEngine, make_worker, dataset_id: int, type: JobType = JobType.fetch) -> Job:
+  """Runs a fetch job (or a sync, which starts with one) and returns it once it has ended."""
   async with AsyncSession(engine, expire_on_commit=False) as session:
-    job = await enqueue(session, JobType.fetch, dataset_id=dataset_id)
+    job = await enqueue(session, type, dataset_id=dataset_id)
   await make_worker().run_once()
   async with AsyncSession(engine) as session:
     job = await session.get(Job, job.id)
@@ -297,6 +298,54 @@ async def test_unreachable_source_removes_nothing(worker_engine, make_worker, bu
 async def test_fetch_without_source_fails(worker_engine, make_worker, filesystem):
   dataset_id = await add_dataset(worker_engine, None)
   job = await fetch(worker_engine, make_worker, dataset_id)
+  assert job.status == JobStatus.failed
+  assert job.error == f"Dataset {dataset_id} has no source"
+
+
+async def test_sync_fetches_first(worker_engine, make_worker, bucket, filesystem):
+  bucket.put("a.nc", "a" * 10)
+  bucket.put("b.nc", "b" * 5)
+  dataset_id = await add_dataset(worker_engine, bucket)
+
+  job = await fetch(worker_engine, make_worker, dataset_id, JobType.sync)
+  assert job.status == JobStatus.succeeded, job.error
+  assert job.result == result(files_new=2, bytes_copied=15)
+  assert job.log.startswith("Listing the source\n")
+  assert job.log.endswith("Processing isn't implemented yet: the fetched files stay `new`")
+  assert archive(filesystem, dataset_id) == {"a.nc": "a" * 10, "b.nc": "b" * 5}
+  assert {path: file.status for path, file in (await index(worker_engine, dataset_id)).items()} == {"a.nc": FileStatus.new, "b.nc": FileStatus.new}
+
+
+async def test_second_sync_copies_only_the_changes(worker_engine, make_worker, bucket, filesystem):
+  bucket.put("a.nc", "a")
+  bucket.put("b.nc", "b")
+  dataset_id = await add_dataset(worker_engine, bucket)
+  await fetch(worker_engine, make_worker, dataset_id, JobType.sync)
+
+  bucket.put("c.nc", "cc")
+  bucket.remove("b.nc")
+  job = await fetch(worker_engine, make_worker, dataset_id, JobType.sync)
+  assert job.status == JobStatus.succeeded, job.error
+  assert job.result == result(files_new=1, files_removed=1, files_unchanged=1, bytes_copied=2)
+  assert archive(filesystem, dataset_id) == {"a.nc": "a", "c.nc": "cc"}
+
+
+async def test_sync_fails_when_its_fetch_fails(worker_engine, make_worker, bucket, filesystem):
+  bucket.put("a.nc", "a")
+  dataset_id = await add_dataset(worker_engine, bucket)
+  await fetch(worker_engine, make_worker, dataset_id, JobType.sync)
+
+  bucket.remove("a.nc")
+  job = await fetch(worker_engine, make_worker, dataset_id, JobType.sync)
+  assert job.status == JobStatus.failed
+  assert job.error is not None and job.error.startswith("The source has no files, but the archive has 1 files.")
+  assert "Processing" not in job.log
+  assert archive(filesystem, dataset_id) == {"a.nc": "a"}
+
+
+async def test_sync_without_source_fails(worker_engine, make_worker, filesystem):
+  dataset_id = await add_dataset(worker_engine, None)
+  job = await fetch(worker_engine, make_worker, dataset_id, JobType.sync)
   assert job.status == JobStatus.failed
   assert job.error == f"Dataset {dataset_id} has no source"
 
