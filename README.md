@@ -52,6 +52,7 @@ Environment variables that control the API:
 | `FILESYSTEM`                     | none                    | Folder on the host that Docker Compose mounts as `/code/filesystem` in the container.                                          |
 | `SOURCE_ALLOW_PRIVATE_ENDPOINTS` | `false`                 | `true` accepts S3 endpoints over plain HTTP and in private networks, e.g. the local test S3 server. Never allow in production. |
 | `TEST_S3_ENDPOINT`               | `http://localhost:8333` | Only for the tests: where the local S3 server from `docker-compose.test.yml` runs.                                             |
+| `OLD_DATABASE_URL`               | `…/datalakes_old`       | Only for `scripts/seed_dummy_data.py`: URL of the old Datalakes database it copies the vocabularies from.                      |
 
 ### 4. Launch service
 ```console
