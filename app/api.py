@@ -14,7 +14,7 @@ from app.database import DATABASE_URL, check_db_connection, engine, get_safe_db_
 from app.errors import add_exception_handlers
 from app.observability import setup_observability
 from app.openapi import ADMIN_DOCS_URL, setup_openapi
-from app.routes import datasets, files, jobs, sources, sync
+from app.routes import datasets, files, jobs, sources, sync, variables
 
 setup_observability()
 logger = logging.getLogger(__name__)
@@ -94,6 +94,7 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 add_exception_handlers(app)
 
 app.include_router(datasets.router)
+app.include_router(variables.router)
 app.include_router(sources.router)
 app.include_router(sync.router)
 app.include_router(jobs.router)

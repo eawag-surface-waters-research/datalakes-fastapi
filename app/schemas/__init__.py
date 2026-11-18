@@ -9,16 +9,18 @@ from app.schemas.jobs import JobBase, JobRead, RegenerateRunBase
 from app.schemas.maintenance import CatalogueVersionBase, SyncTokenBase
 from app.schemas.sites import SiteBase, SiteRead
 from app.schemas.sources import SourceBase, SourceEntry, SourceRead, SourceTestResult, SourceType, SourceTypeOption
-from app.schemas.variables import VariableBase
+from app.schemas.variables import VariableBase, VariableCreate, VariableRead
 from app.schemas.vocabularies import (
   LicenseBase,
   LicenseRead,
   OrganisationBase,
   OrganisationRead,
   ParameterBase,
+  ParameterRead,
   PersonBase,
   PersonRead,
   SensorBase,
+  SensorRead,
   SiteTypeBase,
 )
 
@@ -42,10 +44,12 @@ __all__ = [
   "OrganisationBase",
   "OrganisationRead",
   "ParameterBase",
+  "ParameterRead",
   "PersonBase",
   "PersonRead",
   "RegenerateRunBase",
   "SensorBase",
+  "SensorRead",
   "SiteBase",
   "SiteRead",
   "SiteTypeBase",
@@ -57,4 +61,6 @@ __all__ = [
   "SourceTypeOption",
   "SyncTokenBase",
   "VariableBase",
+  "VariableCreate",
+  "VariableRead",
 ]

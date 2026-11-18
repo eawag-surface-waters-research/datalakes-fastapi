@@ -51,3 +51,11 @@ class PersonRead(PersonBase):
 
 class LicenseRead(LicenseBase):
   id: int
+
+
+class ParameterRead(ParameterBase):
+  id: int
+
+
+class SensorRead(SensorBase):
+  id: int

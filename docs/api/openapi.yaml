@@ -44,7 +44,7 @@ info:
     3. Fetch the files: `POST /datasets/{dataset_id}/fetch`, then poll the job. The files are only copied and listed, nothing is processed.
     4. See the files: `GET /datasets/{dataset_id}/files`.
     5. Get suggested variables from a file in the archive: `POST /datasets/{dataset_id}/inspect`.
-    6. Create the variables: `POST /datasets/{dataset_id}/variables`.
+    6. Create the variables from the reviewed suggestions: `PUT /datasets/{dataset_id}/variables`.
     7. Build the data from the archived files: `POST /datasets/{dataset_id}/rebuild`.
     8. Keep it up to date: `POST /datasets/{dataset_id}/sync` fetches what changed in the source and processes it.
 
@@ -484,7 +484,7 @@ paths:
       description: |
         Lists the variables of a dataset: coordinates (time, depth…) first, then data and flag variables.
 
-        Variables migrated from the old system have a `legacy_axis`. Use it to translate the `axis:[...]` part of an old link (e.g. `axis:[x,y,z]`) into variable names.
+        Variables migrated from the old system have a `legacy_axis`, and others can be given one. Use it to translate the `axis:[...]` part of an old link (e.g. `axis:[x,y,z]`) into variable names.
 
         - **Drafts:** their variables are returned like any other.
         - **Link datasets** have no variables, so the list is empty.
@@ -609,21 +609,131 @@ paths:
                       sensor: null
         "404":
           $ref: "#/components/responses/NotFound"
+    put:
+      tags: [Variables]
+      operationId: setVariables
+      summary: Set all of a dataset's variables
+      description: |
+        Sets all of the dataset's variables at once, e.g. from the suggestions of inspect (`POST /datasets/{dataset_id}/inspect`) after review.
+
+        The list is checked as a whole:
+        - each `name` is used once, and so is each `legacy_axis`,
+        - each of the `dimensions` names a `time` or `coordinate` variable of the list (a coordinate can name itself),
+        - a `flag` variable names a `data` variable of the list in `flag_for`,
+        - `parameter_id` and `sensor_id` exist in their vocabularies.
+
+        Variables are matched to the stored ones by `name`. A stored variable with the same name is updated and keeps its `id`, a new name adds a variable, and a stored variable whose name isn't in the list is removed. An empty list removes all variables.
+
+        `legacy_axis` is the variable's axis in the old system (e.g. `z1`), so that old links keep working. It can only be set when a variable is added. A stored variable keeps its `legacy_axis`: leave it out or send the same value.
+
+        Increases the dataset's `version` if anything changed. The variables can't be changed while a fetch, sync or rebuild of the dataset is queued or running.
+
+        - **Drafts:** variables can be set as usual.
+        - **Link datasets** can't have variables.
+
+        **Access:** user (own datasets) or owner.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: "#/components/schemas/VariableCreate"
+            examples:
+              thermistor_chain:
+                summary: The variables of a thermistor chain
+                value:
+                  - name: time
+                    source_name: time
+                    role: time
+                    dimensions: [time]
+                    parameter_id: 1
+                  - name: depth
+                    source_name: depth
+                    role: coordinate
+                    dimensions: [depth]
+                    unit: m
+                    parameter_id: 2
+                  - name: temperature
+                    source_name: temp
+                    role: data
+                    dimensions: [time, depth]
+                    unit: degC
+                    parameter_id: 5
+                    sensor_id: 7
+                    description: Water temperature from the calibrated loggers
+                    decoding:
+                      missing_values: [-9999]
+                  - name: temperature_qual
+                    source_name: temp_qual
+                    role: flag
+                    dimensions: [time, depth]
+                    flag_for: temperature
+                    description: 1 where the temperature failed the quality checks
+      responses:
+        "200":
+          description: The dataset's variables, in the order sent. `parameter` and `sensor` aren't expanded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VariableList"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          description: The variables are invalid, e.g. a name is used twice or a dimension doesn't name a coordinate, or the dataset is a link dataset.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                unknown_dimension:
+                  summary: A dimension isn't a coordinate of the dataset
+                  value:
+                    detail: "temperature: dimension 'depth' is not a time or coordinate variable of dataset 123"
+                    code: validation_error
+                duplicate_name:
+                  summary: Two variables have the same name
+                  value:
+                    detail: Variable name 'temperature' is used more than once
+                    code: validation_error
+                duplicate_legacy_axis:
+                  summary: Two variables have the same legacy_axis
+                  value:
+                    detail: "legacy_axis 'z' is used by more than one variable: temperature, oxygen"
+                    code: validation_error
+                legacy_axis_changed:
+                  summary: A stored variable's legacy_axis is changed
+                  value:
+                    detail: "temperature: legacy_axis can't be changed on an existing variable (it is z)"
+                    code: validation_error
+                unknown_reference:
+                  summary: The parameter doesn't exist
+                  value:
+                    detail: Parameter 999 not found
+                    code: unknown_reference
+                link_dataset:
+                  summary: The dataset is a link dataset
+                  value:
+                    detail: Dataset 2 is a link dataset and can't have variables
+                    code: link_dataset
     post:
       tags: [Variables]
       operationId: createVariable
       summary: Add a variable
       description: |
-        Adds a variable to a dataset. Increases the dataset's `version`.
+        Adds a variable to a dataset. Increases the dataset's `version`. To set all variables at once, use `PUT /datasets/{dataset_id}/variables`.
 
-        A variable is described by what it is, not by a plot axis:
-
+        A variable is described by what it is:
         - `role`: `time` or `coordinate` for the axes the data runs along, `data` for measured values, `flag` for quality flags.
-        - `dimensions`: the names of the coordinate variables it runs along. A coordinate's only dimension is itself, e.g. `depth` has `["depth"]`. A data variable's dimensions must name existing `time` or `coordinate` variables of the same dataset.
+        - `dimensions`: the names of the `time` and `coordinate` variables it runs along, in the order of the data. They must exist already, except that a coordinate can name itself: `depth` has `["depth"]`. So add the time and coordinates first.
+        - `flag_for`: for a `flag` variable, the name of an existing `data` variable it flags. Other roles have no `flag_for`.
 
-        Inspect (`POST /datasets/{dataset_id}/inspect`) suggests variables from a file in the archive.
+        `legacy_axis` is the variable's axis in the old system (e.g. `z1`), so that old links keep working. It's optional and unique within the dataset, and can't be changed once the variable exists.
 
-        `legacy_axis` is ignored if sent: only the migration from the old system sets it.
+        The variables can't be changed while a fetch, sync or rebuild of the dataset is queued or running.
 
         - **Drafts:** variables can be added as usual.
         - **Link datasets** can't have variables (422).
@@ -670,14 +780,27 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: The dataset already has a variable with this name.
+          description: The dataset already has a variable with this name or `legacy_axis`, or a fetch, sync or rebuild of it is queued or running.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-              example:
-                detail: Dataset 123 already has a variable named temperature
-                code: already_exists
+              examples:
+                already_exists:
+                  summary: The name is taken
+                  value:
+                    detail: Dataset 123 already has a variable named temperature
+                    code: already_exists
+                legacy_axis_taken:
+                  summary: The legacy_axis is taken
+                  value:
+                    detail: Dataset 123 already has a variable with legacy_axis z (temperature)
+                    code: already_exists
+                job_in_progress:
+                  summary: A job of the dataset is running
+                  value:
+                    detail: Dataset 123 already has a job running (job 5812)
+                    code: job_in_progress
         "422":
           description: The variable is invalid, e.g. its dimensions don't name coordinates of the dataset, or the dataset is a link dataset.
           content:
@@ -688,8 +811,13 @@ paths:
                 unknown_dimension:
                   summary: A dimension isn't a coordinate of the dataset
                   value:
-                    detail: "Dimension 'depth' is not a time or coordinate variable of dataset 123"
+                    detail: "temperature: dimension 'depth' is not a time or coordinate variable of dataset 123"
                     code: validation_error
+                unknown_reference:
+                  summary: The parameter doesn't exist
+                  value:
+                    detail: Parameter 999 not found
+                    code: unknown_reference
                 link_dataset:
                   summary: The dataset is a link dataset
                   value:
@@ -707,7 +835,7 @@ paths:
       description: |
         Only the fields sent are changed. Increases the dataset's `version`. Renaming a coordinate also renames it in the `dimensions` of the variables that use it.
 
-        `legacy_axis` can't be changed: it is ignored if sent. It stays the same when the variable is renamed, so old links keep pointing to it.
+        `legacy_axis` can't be changed: it can only be set when the variable is added. It stays the same when the variable is renamed, so old links keep pointing to it.
 
         **Access:** user (own datasets) or owner.
       requestBody:
@@ -1904,7 +2032,7 @@ paths:
       description: |
         Reads one file from the dataset's archive and suggests the dataset's variables and feature type, in the response. Only the file's metadata and a small sample of its values are read. Fetch the dataset first, so that the file is in the archive, and pick it from `GET /datasets/{dataset_id}/files`.
 
-        The suggestions are not saved. Review them, then create the variables with `POST /datasets/{dataset_id}/variables`.
+        The suggestions are not saved. Review them, then save them with `PUT /datasets/{dataset_id}/variables`.
 
         While a fetch, sync or rebuild of the dataset is queued or running, this returns 409 with the job's ID, as the job may change the archive.
 
@@ -4366,7 +4494,7 @@ components:
           examples: [7]
         flag_for:
           type: [string, "null"]
-          description: For `flag` variables, the name of the data variable they flag. `null` for other roles.
+          description: For `flag` variables, the name of the data variable they flag (required). `null` for other roles.
           examples: [temperature]
         description:
           type: [string, "null"]
@@ -4375,12 +4503,23 @@ components:
             - $ref: "#/components/schemas/Decoding"
             - type: "null"
 
+    LegacyAxis:
+      type: [string, "null"]
+      pattern: "^[Mxyz][0-9]*$"
+      description: |
+        The variable's axis in the old API (`x`, `y`, `z` or `M`, optionally followed by a number, e.g. `z1`), so that old links that pick variables with `axis:[...]` keep working.
+        Unique within a dataset. `null` if the variable has none. Can only be set when the variable is added, and can't be changed afterwards.
+      examples: [z]
+
     VariableCreate:
       description: A new variable.
       allOf:
         - $ref: "#/components/schemas/VariableBase"
         - type: object
           required: [name, source_name, role, dimensions]
+          properties:
+            legacy_axis:
+              $ref: "#/components/schemas/LegacyAxis"
 
     VariableUpdate:
       description: Changes to a variable. Only the fields sent are changed, and `null` clears a field.
@@ -4401,14 +4540,7 @@ components:
               type: integer
               examples: [123]
             legacy_axis:
-              type: [string, "null"]
-              readOnly: true
-              pattern: "^[Mxyz][0-9]*$"
-              description: |
-                The variable's axis in the old Datalakes system (`x`, `y`, `z`, `M`, optionally followed by a digit, e.g. `z1`), kept so that old links keep working.
-
-                Set only by the migration from the old system and unique within a dataset. `null` for variables created later. It can't be set or changed through the API: it is ignored if sent.
-              examples: [z]
+              $ref: "#/components/schemas/LegacyAxis"
             parameter:
               description: The parameter of `parameter_id`, or `null`. Only with `expand=true`.
               anyOf:

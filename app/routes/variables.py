@@ -1,0 +1,342 @@
+from collections import Counter
+from collections.abc import Iterable
+from typing import Annotated
+
+from fastapi import APIRouter, Body
+from fastapi.openapi.models import Example
+from sqlmodel import col, select
+
+from app.database import SessionDep
+from app.enums import DatasetKind, VariableRole
+from app.errors import ApiError, ErrorResponse, not_found
+from app.models import Dataset, Parameter, Sensor, Variable
+from app.references import Reference, check_references
+from app.routes.sync import CONFLICT_RESPONSE, ensure_no_active_job
+from app.schemas import ParameterRead, SensorRead, VariableBase, VariableCreate, VariableRead
+
+router = APIRouter(prefix="/datasets", tags=["Variables"])
+
+REFERENCES: dict[str, Reference] = {
+  "parameter_id": Reference("Parameter", Parameter, ParameterRead),
+  "sensor_id": Reference("Sensor", Sensor, SensorRead),
+}
+
+AXIS_ROLES = (VariableRole.time, VariableRole.coordinate)  # the roles a dimension can name
+
+TIME = {"name": "time", "source_name": "time", "role": "time", "dimensions": ["time"], "parameter_id": 1}
+DEPTH = {"name": "depth", "source_name": "depth", "role": "coordinate", "dimensions": ["depth"], "unit": "m", "parameter_id": 2}
+TEMPERATURE = {
+  "name": "temperature",
+  "source_name": "temp",
+  "role": "data",
+  "dimensions": ["time", "depth"],
+  "unit": "degC",
+  "parameter_id": 5,
+  "sensor_id": 7,
+  "description": "Water temperature from the calibrated loggers",
+  "decoding": {"missing_values": [-9999]},
+}
+TEMPERATURE_FLAG = {
+  "name": "temperature_qual",
+  "source_name": "temp_qual",
+  "role": "flag",
+  "dimensions": ["time", "depth"],
+  "flag_for": "temperature",
+  "description": "1 where the temperature failed the quality checks",
+}
+
+VARIABLE_CREATE_EXAMPLES: dict[str, Example] = {
+  "data": {"summary": "A data variable on time and depth", "value": TEMPERATURE},
+  "time": {"summary": "A time coordinate, decoded from the CF units in the file", "value": TIME},
+  "flag": {"summary": "A quality flag for a data variable", "value": TEMPERATURE_FLAG},
+  "legacy_axis": {"summary": "A variable that old links know as axis z", "value": {**TEMPERATURE, "legacy_axis": "z"}},
+}
+VARIABLE_LIST_EXAMPLES: dict[str, Example] = {
+  "thermistor_chain": {"summary": "The variables of a thermistor chain", "value": [TIME, DEPTH, TEMPERATURE, TEMPERATURE_FLAG]},
+}
+
+
+def read_example(id: int, variable: dict) -> dict:
+  defaults = {"unit": None, "parameter_id": None, "sensor_id": None, "flag_for": None, "description": None, "decoding": None, "legacy_axis": None}
+  return {"id": id, "dataset_id": 123, **defaults, **variable}
+
+
+NOT_FOUND_RESPONSE = {404: {"model": ErrorResponse, "description": "The dataset doesn't exist."}}
+LINK_DATASET_EXAMPLE = {
+  "summary": "The dataset is a link dataset",
+  "value": {"detail": "Dataset 2 is a link dataset and can't have variables", "code": "link_dataset"},
+}
+UNKNOWN_DIMENSION_EXAMPLE = {
+  "summary": "A dimension isn't a coordinate of the dataset",
+  "value": {"detail": "temperature: dimension 'depth' is not a time or coordinate variable of dataset 123", "code": "validation_error"},
+}
+UNKNOWN_REFERENCE_EXAMPLE = {
+  "summary": "The parameter doesn't exist",
+  "value": {"detail": "Parameter 999 not found", "code": "unknown_reference"},
+}
+
+
+async def get_dataset(session: SessionDep, dataset_id: int) -> Dataset:
+  """
+  The dataset, locked until the end of the request, so that concurrent changes to its variables run one after the other and no job can be queued between the job check and the commit.
+  """
+  dataset = await session.get(Dataset, dataset_id, with_for_update=True)
+  if dataset is None:
+    raise not_found("Dataset", dataset_id)
+  if dataset.kind == DatasetKind.link:
+    raise ApiError(422, "link_dataset", f"Dataset {dataset_id} is a link dataset and can't have variables")
+  return dataset
+
+
+def invalid_variable(variable: VariableBase, detail: str) -> ApiError:
+  return ApiError(422, "validation_error", f"{variable.name}: {detail}")
+
+
+def check_variable(dataset_id: int, variable: VariableBase, axes: set[str], data: set[str]) -> None:
+  """
+  Checks a variable against the other variables of its dataset: `axes` are the names of its time and coordinate variables, `data` the names of its data variables, both including the variable itself.
+  """
+  for dimension, count in Counter(variable.dimensions).items():
+    if count > 1:
+      raise invalid_variable(variable, f"dimension '{dimension}' is listed more than once")
+    if dimension not in axes:
+      raise invalid_variable(variable, f"dimension '{dimension}' is not a time or coordinate variable of dataset {dataset_id}")
+
+  if variable.role == VariableRole.flag:
+    if variable.flag_for is None:
+      raise invalid_variable(variable, "a flag variable needs flag_for, the name of the data variable it flags")
+    if variable.flag_for not in data:
+      raise invalid_variable(variable, f"flag_for '{variable.flag_for}' is not a data variable of dataset {dataset_id}")
+  elif variable.flag_for is not None:
+    raise invalid_variable(variable, "only flag variables can have flag_for")
+
+
+def names_by_role(variables: Iterable[VariableBase]) -> tuple[set[str], set[str]]:
+  """The names of the time and coordinate variables, and the names of the data variables."""
+  variables = list(variables)
+  return {v.name for v in variables if v.role in AXIS_ROLES}, {v.name for v in variables if v.role == VariableRole.data}
+
+
+async def stored_variables(session: SessionDep, dataset_id: int) -> list[Variable]:
+  return list((await session.exec(select(Variable).where(Variable.dataset_id == dataset_id).order_by(col(Variable.id)))).all())
+
+
+@router.put(
+  "/{dataset_id}/variables",
+  response_model=list[VariableRead],
+  response_model_exclude_unset=True,  # leaves out the referenced objects, which are never expanded here
+  summary="Set all of a dataset's variables",
+  responses={
+    200: {
+      "description": "The dataset's variables, in the order sent. `parameter` and `sensor` aren't expanded.",
+      "content": {
+        "application/json": {
+          "example": [read_example(901, TIME), read_example(902, DEPTH), read_example(903, TEMPERATURE), read_example(904, TEMPERATURE_FLAG)]
+        }
+      },
+    },
+    **NOT_FOUND_RESPONSE,
+    **CONFLICT_RESPONSE,
+    422: {
+      "model": ErrorResponse,
+      "description": "The variables are invalid, e.g. a name is used twice or a dimension doesn't name a coordinate, or the dataset is a link dataset.",
+      "content": {
+        "application/json": {
+          "examples": {
+            "unknown_dimension": UNKNOWN_DIMENSION_EXAMPLE,
+            "duplicate_name": {
+              "summary": "Two variables have the same name",
+              "value": {"detail": "Variable name 'temperature' is used more than once", "code": "validation_error"},
+            },
+            "duplicate_legacy_axis": {
+              "summary": "Two variables have the same legacy_axis",
+              "value": {"detail": "legacy_axis 'z' is used by more than one variable: temperature, oxygen", "code": "validation_error"},
+            },
+            "legacy_axis_changed": {
+              "summary": "A stored variable's legacy_axis is changed",
+              "value": {"detail": "temperature: legacy_axis can't be changed on an existing variable (it is z)", "code": "validation_error"},
+            },
+            "unknown_reference": UNKNOWN_REFERENCE_EXAMPLE,
+            "link_dataset": LINK_DATASET_EXAMPLE,
+          }
+        }
+      },
+    },
+  },
+)
+async def set_variables(
+  dataset_id: int,
+  variables: Annotated[list[VariableCreate], Body(openapi_examples=VARIABLE_LIST_EXAMPLES)],
+  session: SessionDep,
+):
+  """
+  Sets all of the dataset's variables at once.
+
+  The list is checked as a whole:
+  - each `name` is used once, and so is each `legacy_axis`,
+  - each of the `dimensions` names a `time` or `coordinate` variable of the list (a coordinate can name itself),
+  - a `flag` variable names a `data` variable of the list in `flag_for`,
+  - `parameter_id` and `sensor_id` exist in their vocabularies.
+
+  Variables are matched to the stored ones by `name`. A stored variable with the same name is updated and keeps its `id`,
+  a new name adds a variable, and a stored variable whose name isn't in the list is removed. An empty list removes all variables.
+
+  `legacy_axis` is the variable's axis in the old API (e.g. `z1`), so that old links keep working.
+  It can only be set when a variable is added. A stored variable keeps its `legacy_axis`: leave it out or send the same value.
+
+  Increases the dataset's `version` if anything changed. The variables can't be changed while a fetch, sync or rebuild of the dataset is queued
+  or running.
+
+  - **Drafts:** variables can be set as usual.
+  - **Link datasets** can't have variables.
+
+  **Access:** user (own datasets) or owner.
+  """
+  dataset = await get_dataset(session, dataset_id)
+  await ensure_no_active_job(session, dataset_id)
+
+  for name, count in Counter(v.name for v in variables).items():
+    if count > 1:
+      raise ApiError(422, "validation_error", f"Variable name '{name}' is used more than once")
+  axes, data = names_by_role(variables)
+
+  for variable in variables:
+    check_variable(dataset_id, variable, axes, data)
+
+  stored = {v.name: v for v in await stored_variables(session, dataset_id)}
+
+  # legacy_axis can only be set when a variable is added: an existing variable keeps its own
+  for variable in variables:
+    existing = stored.get(variable.name)
+    if existing is not None and "legacy_axis" in variable.model_fields_set and variable.legacy_axis != existing.legacy_axis:
+      raise invalid_variable(variable, f"legacy_axis can't be changed on an existing variable (it is {existing.legacy_axis or 'null'})")
+
+  legacy_axes = {v.name: stored[v.name].legacy_axis if v.name in stored else v.legacy_axis for v in variables}
+  for axis, count in Counter(axis for axis in legacy_axes.values() if axis is not None).items():  # each legacy_axis is used at most once
+    if count > 1:
+      variable_name_users = [name for name, used in legacy_axes.items() if used == axis]
+      raise ApiError(422, "validation_error", f"legacy_axis '{axis}' is used by more than one variable: {', '.join(variable_name_users)}")
+
+  for variable in variables:
+    await check_references(session, variable, REFERENCES)
+
+  # Delete the removed variables before adding the new ones, as a new variable can take a removed one's legacy_axis,
+  # and the unique constraint on (dataset_id, legacy_axis) is checked row by row.
+  removed = [v for name, v in stored.items() if name not in legacy_axes]
+  for variable in removed:
+    await session.delete(variable)
+  await session.flush()
+
+  changed = bool(removed)
+  result = []
+  for variable in variables:
+    existing = stored.get(variable.name)
+    if existing is None:
+      existing = Variable.model_validate(variable, update={"dataset_id": dataset_id})
+      changed = True
+    else:
+      values = variable.model_dump(exclude={"legacy_axis"})
+      if any(getattr(existing, field) != value for field, value in values.items()):
+        existing.sqlmodel_update(values)
+        changed = True
+    session.add(existing)
+    result.append(existing)
+
+  if changed:
+    dataset.version += 1
+    session.add(dataset)
+  await session.commit()
+  for variable in result:
+    await session.refresh(variable)
+  return result
+
+
+@router.post(
+  "/{dataset_id}/variables",
+  response_model=VariableRead,
+  response_model_exclude_unset=True,  # leaves out the referenced objects, which are never expanded here
+  status_code=201,
+  summary="Add a variable",
+  responses={
+    201: {"description": "The variable was added.", "content": {"application/json": {"example": read_example(903, TEMPERATURE)}}},
+    **NOT_FOUND_RESPONSE,
+    409: {
+      "model": ErrorResponse,
+      "description": "The dataset already has a variable with this name or `legacy_axis`, or a fetch, sync or rebuild of it is queued or running.",
+      "content": {
+        "application/json": {
+          "examples": {
+            "already_exists": {
+              "summary": "The name is taken",
+              "value": {"detail": "Dataset 123 already has a variable named temperature", "code": "already_exists"},
+            },
+            "legacy_axis_taken": {
+              "summary": "The legacy_axis is taken",
+              "value": {"detail": "Dataset 123 already has a variable with legacy_axis z (temperature)", "code": "already_exists"},
+            },
+            "job_in_progress": {
+              "summary": "A job of the dataset is running",
+              "value": {"detail": "Dataset 123 already has a job running (job 5812)", "code": "job_in_progress"},
+            },
+          }
+        }
+      },
+    },
+    422: {
+      "model": ErrorResponse,
+      "description": "The variable is invalid, e.g. its dimensions don't name coordinates of the dataset, or the dataset is a link dataset.",
+      "content": {
+        "application/json": {
+          "examples": {
+            "unknown_dimension": UNKNOWN_DIMENSION_EXAMPLE,
+            "unknown_reference": UNKNOWN_REFERENCE_EXAMPLE,
+            "link_dataset": LINK_DATASET_EXAMPLE,
+          }
+        }
+      },
+    },
+  },
+)
+async def create_variable(
+  dataset_id: int,
+  variable: Annotated[VariableCreate, Body(openapi_examples=VARIABLE_CREATE_EXAMPLES)],
+  session: SessionDep,
+):
+  """
+  Adds a variable to a dataset. Increases the dataset's `version`. To set all variables at once, use `PUT /datasets/{dataset_id}/variables`.
+
+  A variable is described by what it is:
+  - `role`: `time` or `coordinate` for the axes the data runs along, `data` for measured values, `flag` for quality flags.
+  - `dimensions`: the names of the `time` and `coordinate` variables it runs along, in the order of the data. They must exist already, except
+    that a coordinate can name itself: `depth` has `["depth"]`. So add the time and coordinates first.
+  - `flag_for`: for a `flag` variable, the name of an existing `data` variable it flags. Other roles have no `flag_for`.
+
+  `legacy_axis` is the variable's axis in the old API (e.g. `z1`), so that old links keep working. It's optional and unique within the dataset, and can't be changed once the variable exists.
+
+  The variables can't be changed while a fetch, sync or rebuild of the dataset is queued or running.
+
+  - **Drafts:** variables can be added as usual.
+  - **Link datasets** can't have variables (422).
+
+  **Access:** user (own datasets) or owner.
+  """
+  dataset = await get_dataset(session, dataset_id)
+  await ensure_no_active_job(session, dataset_id)
+
+  stored = await stored_variables(session, dataset_id)
+  if any(v.name == variable.name for v in stored):
+    raise ApiError(409, "already_exists", f"Dataset {dataset_id} already has a variable named {variable.name}")
+  if variable.legacy_axis is not None and (owner := next((v for v in stored if v.legacy_axis == variable.legacy_axis), None)) is not None:
+    raise ApiError(409, "already_exists", f"Dataset {dataset_id} already has a variable with legacy_axis {variable.legacy_axis} ({owner.name})")
+
+  axes, data = names_by_role([*stored, variable])
+  check_variable(dataset_id, variable, axes, data)
+  await check_references(session, variable, REFERENCES)
+
+  created = Variable.model_validate(variable, update={"dataset_id": dataset_id})
+  dataset.version += 1
+  session.add_all([created, dataset])
+  await session.commit()
+  await session.refresh(created)
+
+  return created

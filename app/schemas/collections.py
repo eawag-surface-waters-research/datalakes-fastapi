@@ -6,7 +6,7 @@ from sqlmodel import Field, SQLModel
 
 
 class CollectionBase(SQLModel):
-  slug: str = Field(unique=True, regex=r"^(?=.*[a-z])[a-z0-9]+(-[a-z0-9]+)*$")
+  slug: str = Field(unique=True, schema_extra={"pattern": r"^([0-9]+-)*[0-9]*[a-z][a-z0-9]*(-[a-z0-9]+)*$"})
   name: str = Field(min_length=1)
   description: str | None = None
   link: str | None = None
