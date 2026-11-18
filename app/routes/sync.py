@@ -7,7 +7,7 @@ from app import inspection
 from app.database import SessionDep
 from app.enums import DatasetKind, JobStatus, JobType
 from app.errors import ApiError, ErrorResponse, not_found
-from app.models import Dataset, File, Job, Parameter, Source
+from app.models import Dataset, File, Job, Parameter, Source, Variable
 from app.routes.jobs import QUEUED_JOB_EXAMPLE
 from app.schemas import InspectRequest, JobRead
 from app.schemas.inspect import InspectResult
@@ -70,14 +70,23 @@ async def get_dataset_with_source(session: SessionDep, dataset_id: int, verb: st
   return dataset
 
 
-async def queue_dataset_job(session: SessionDep, dataset_id: int, type: JobType) -> Job:
+async def ensure_has_variables(session: SessionDep, dataset_id: int) -> None:
+  """Raises 422 if the dataset has no variables"""
+  if (await session.exec(select(Variable.id).where(Variable.dataset_id == dataset_id).limit(1))).first() is None:
+    raise ApiError(422, "no_variables", f"Dataset {dataset_id} has no variables. Fetch, inspect and create the variables, then rebuild it.")
+
+
+async def queue_dataset_job(session: SessionDep, dataset_id: int, type: JobType, *, needs_variables: bool = False) -> Job:
   """
   Queues a job of an exclusive type for a dataset that has a source.
-  Raises 404 for an unknown dataset, 422 for a dataset without a source, and 409 if another exclusive job is queued or running.
+  Raises 404 for an unknown dataset, 422 for a dataset without a source (or without variables, if `needs_variables`),
+  and 409 if another exclusive job is queued or running.
   """
   # Locking the dataset row makes concurrent requests for the same dataset wait here, so only one of them queues a job.
   # The lock is released by the commit in `enqueue`, or by the rollback when an error is raised.
   await get_dataset_with_source(session, dataset_id, VERBS[type], lock=True)
+  if needs_variables:
+    await ensure_has_variables(session, dataset_id)
   await ensure_no_active_job(session, dataset_id)
   return await enqueue(session, type, dataset_id=dataset_id)
 
@@ -129,6 +138,69 @@ async def fetch_dataset(dataset_id: int, session: SessionDep):
   **Access:** user (own datasets) or owner.
   """
   return await queue_dataset_job(session, dataset_id, JobType.fetch)
+
+
+@router.post(
+  "/{dataset_id}/sync",
+  response_model=JobRead,
+  status_code=202,
+  summary="Update a dataset from its source",
+  responses={
+    **job_accepted_response(JobType.sync),
+    **NOT_FOUND_RESPONSE,
+    **CONFLICT_RESPONSE,
+    422: {
+      "model": ErrorResponse,
+      "description": "The dataset has no source (e.g. it's a link dataset) or no variables.",
+      "content": {
+        "application/json": {
+          "examples": {
+            "no_source": {"summary": "The dataset has no source", "value": {"detail": "Dataset 512 has no source", "code": "no_source"}},
+            "no_variables": {
+              "summary": "The dataset has no variables yet",
+              "value": {
+                "detail": "Dataset 512 has no variables. Fetch, inspect and create the variables, then rebuild it.",
+                "code": "no_variables",
+              },
+            },
+            "link_dataset": {
+              "summary": "The dataset is a link dataset",
+              "value": {"detail": "Dataset 2 is a link dataset and can't be synced", "code": "link_dataset"},
+            },
+          }
+        }
+      },
+    },
+  },
+)
+async def sync_dataset(dataset_id: int, session: SessionDep):
+  """
+  Queues a `sync` job and returns it. It is a fetch (`POST /datasets/{dataset_id}/fetch`) followed by processing. The worker:
+
+  1. Lists the source and compares it with the file index. A file is **new** if the index doesn't have it, **changed** if its size
+     or modified time differs or it's missing from the archive, and **removed** if it's no longer in the source.
+     Only the files directly in the source's folder count: if subfolders have appeared since the source was set, the files in them
+     are skipped and the log has a warning naming the subfolders. The job doesn't fail because of them.
+  2. Copies new and changed files into the dataset's archive, replacing the old copy of a changed file. Removed files are deleted from
+     the archive and from the index. New and changed files are marked `new` in the index.
+  3. Processes the files marked `new` into the dataset's data. A changed file replaces the data of its old version, and a removed file's
+     data is taken out. The dataset's extents and availability are recomputed, so they can shrink. Its `version` goes up if anything changed.
+
+  **The dataset needs variables first** (422 `no_variables`). To set up a new dataset, use `fetch`, `inspect`, create the variables
+  and `rebuild` instead.
+
+  **External callers**, such as a processing pipeline, call this endpoint after uploading new data to the source.
+  Some datasets update every 20 minutes, so a sync with nothing new is cheap.
+
+  Only one job per dataset runs at a time. If a fetch, sync or rebuild is already queued or running, this returns 409 with the job's ID.
+  A queued sync will pick up the new files anyway.
+
+  - **Drafts** sync as usual.
+  - **Link datasets** have no source (422).
+
+  **Access:** user (own datasets) or owner, or the dataset's sync token.
+  """
+  return await queue_dataset_job(session, dataset_id, JobType.sync, needs_variables=True)
 
 
 INSPECTED_FILE_EXAMPLE = "L2_ThermistorChain_202406.nc"

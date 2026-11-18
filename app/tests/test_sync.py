@@ -2,8 +2,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.enums import DatasetKind, JobStatus, JobType, SourceBackend
-from app.models import Dataset, Job, Source
+from app.enums import DatasetKind, JobStatus, JobType, SourceBackend, VariableRole
+from app.models import Dataset, Job, Source, Variable
 
 
 async def add_dataset(session, kind=DatasetKind.data, with_source=True) -> Dataset:
@@ -15,6 +15,14 @@ async def add_dataset(session, kind=DatasetKind.data, with_source=True) -> Datas
     session.add(Source(dataset_id=dataset.id, backend=SourceBackend.s3, options={"bucket": "eawag-data"}, last_tested_at=datetime.now(UTC)))
     await session.commit()
   return dataset
+
+
+async def add_variable(session, dataset_id) -> Variable:
+  variable = Variable(dataset_id=dataset_id, name="temperature", source_name="temp", role=VariableRole.data, dimensions=["time"])
+  session.add(variable)
+  await session.commit()
+  await session.refresh(variable)
+  return variable
 
 
 async def add_job(session, dataset_id, type=JobType.fetch, status=JobStatus.queued) -> Job:
@@ -82,3 +90,30 @@ async def test_second_fetch_is_rejected(client, session):
   dataset = await add_dataset(session)
   assert (await client.post(f"/datasets/{dataset.id}/fetch")).status_code == 202
   assert (await client.post(f"/datasets/{dataset.id}/fetch")).status_code == 409
+
+
+async def test_sync_queues_a_job(client, session):
+  dataset = await add_dataset(session)
+  await add_variable(session, dataset.id)
+  response = await client.post(f"/datasets/{dataset.id}/sync")
+  assert response.status_code == 202
+  body = response.json()
+  assert body["dataset_id"] == dataset.id
+  assert body["type"] == "sync"
+  assert body["status"] == "queued"
+
+  job = await session.get(Job, body["id"])
+  assert job is not None
+  assert job.type == JobType.sync
+  assert job.params == {}
+
+
+async def test_sync_dataset_without_variables(client, session):
+  dataset = await add_dataset(session)
+  response = await client.post(f"/datasets/{dataset.id}/sync")
+  assert response.status_code == 422
+  assert response.json() == {
+    "detail": f"Dataset {dataset.id} has no variables. Fetch, inspect and create the variables, then rebuild it.",
+    "code": "no_variables",
+  }
+  assert (await client.get(f"/datasets/{dataset.id}/jobs")).json() == []
