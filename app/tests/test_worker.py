@@ -108,6 +108,14 @@ async def test_fetch_job_without_dataset_fails(worker_engine, make_worker):
   assert job.error == "A fetch job needs a dataset"
 
 
+async def test_sync_job_without_dataset_fails(worker_engine, make_worker):
+  job_id = await queue(worker_engine, JobType.sync)
+  await make_worker().run_once()
+  job = await get_job(worker_engine, job_id)
+  assert job.status == JobStatus.failed
+  assert job.error == "A sync job needs a dataset"
+
+
 async def test_job_without_handler_fails(worker_engine, make_worker):
   job_id = await queue(worker_engine, JobType.export)
   await make_worker().run_once()
