@@ -184,6 +184,11 @@ def filter_flags(source: SourceInputBase) -> list[str]:
 
 
 def lsjson_command(source: SourceInputBase, *flags: str) -> list[str]:
+  flags = (
+    "--use-server-modtime",
+    "--no-mimetype",
+    *flags,
+  )  # list with server's modification times and without MIME types to avoid a HEAD request per file on S3
   return rclone_command("lsjson", *flags, *filter_flags(source), remote=build_remote(source))
 
 
@@ -252,7 +257,7 @@ async def list_source(source: SourceInputBase, timeout: float = LIST_TIMEOUT) ->
   Raises `SourceError` if the source can't be listed within `timeout` seconds, or its config is invalid.
   """
   await check_urls_resolve_publicly(source)
-  command = lsjson_command(source, "--use-server-modtime")
+  command = lsjson_command(source)
   process = await asyncio.create_subprocess_exec(
     *command, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=rclone_env()
   )
