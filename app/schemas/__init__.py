@@ -9,7 +9,7 @@ from app.schemas.jobs import JobBase, JobRead, RegenerateRunBase
 from app.schemas.maintenance import CatalogueVersionBase, SyncTokenBase
 from app.schemas.sites import SiteBase, SiteRead
 from app.schemas.sources import SourceBase, SourceEntry, SourceRead, SourceTestResult, SourceType, SourceTypeOption
-from app.schemas.variables import VariableBase, VariableCreate, VariableRead
+from app.schemas.variables import VariableBase, VariableCreate, VariableRead, VariableUpdate
 from app.schemas.vocabularies import (
   LicenseBase,
   LicenseRead,
@@ -63,4 +63,5 @@ __all__ = [
   "VariableBase",
   "VariableCreate",
   "VariableRead",
+  "VariableUpdate",
 ]

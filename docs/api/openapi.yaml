@@ -833,9 +833,15 @@ paths:
       operationId: updateVariable
       summary: Update a variable
       description: |
-        Only the fields sent are changed. Increases the dataset's `version`. Renaming a coordinate also renames it in the `dimensions` of the variables that use it.
+        Only the fields sent are changed, and `null` clears a field. `name`, `source_name`, `role` and `dimensions` can't be `null`. Increases the dataset's `version` if anything changed.
+
+        Renaming a coordinate also renames it in the `dimensions` of the variables that use it (and in its own, unless `dimensions` is sent). Renaming a data variable also renames it in the `flag_for` of its flag variables.
+
+        The dataset's variables are checked as a whole after the change, like in `PUT /datasets/{dataset_id}/variables`. So a change that breaks another variable is rejected too, e.g. turning a coordinate that other variables use as a dimension into a data variable.
 
         `legacy_axis` can't be changed: it can only be set when the variable is added. It stays the same when the variable is renamed, so old links keep pointing to it.
+
+        The variables can't be changed while a fetch, sync or rebuild of the dataset is queued or running.
 
         **Access:** user (own datasets) or owner.
       requestBody:
@@ -858,18 +864,58 @@ paths:
                 temperature:
                   $ref: "#/components/examples/TemperatureVariable"
         "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          description: Another variable of the dataset already has this name.
+          description: The dataset or the variable doesn't exist.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
               example:
-                detail: Dataset 123 already has a variable named temperature
-                code: already_exists
+                detail: Variable 999 not found
+                code: not_found
+        "409":
+          description: Another variable of the dataset already has this name, or a fetch, sync or rebuild of the dataset is queued or running.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                already_exists:
+                  summary: The name is taken
+                  value:
+                    detail: Dataset 123 already has a variable named temperature
+                    code: already_exists
+                job_in_progress:
+                  summary: A job of the dataset is running
+                  value:
+                    detail: Dataset 123 already has a job running (job 5812)
+                    code: job_in_progress
         "422":
-          $ref: "#/components/responses/ValidationError"
+          description: The change is invalid, e.g. a dimension doesn't name a coordinate, the change breaks another variable, a required field is `null`, or `legacy_axis` is sent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                unknown_dimension:
+                  summary: A dimension isn't a coordinate of the dataset
+                  value:
+                    detail: "temperature: dimension 'depth' is not a time or coordinate variable of dataset 123"
+                    code: validation_error
+                breaks_another_variable:
+                  summary: A coordinate that other variables use as a dimension becomes a data variable
+                  value:
+                    detail: "temperature: dimension 'depth' is not a time or coordinate variable of dataset 123"
+                    code: validation_error
+                legacy_axis:
+                  summary: legacy_axis is sent
+                  value:
+                    detail: "legacy_axis can't be changed: it can only be set when the variable is added"
+                    code: validation_error
+                unknown_reference:
+                  summary: The sensor doesn't exist
+                  value:
+                    detail: Sensor 999 not found
+                    code: unknown_reference
     delete:
       tags: [Variables]
       operationId: deleteVariable
@@ -4544,7 +4590,7 @@ components:
               $ref: "#/components/schemas/LegacyAxis"
 
     VariableUpdate:
-      description: Changes to a variable. Only the fields sent are changed, and `null` clears a field.
+      description: Changes to a variable. Only the fields sent are changed, and `null` clears a field. `name`, `source_name`, `role` and `dimensions` can't be `null`. Other fields, such as `legacy_axis`, are rejected.
       allOf:
         - $ref: "#/components/schemas/VariableBase"
 

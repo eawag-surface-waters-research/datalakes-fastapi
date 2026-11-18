@@ -448,3 +448,107 @@ async def test_delete_variable_while_a_job_is_in_progress(client, session):
   assert response.status_code == 409
   assert response.json() == {"detail": f"Dataset {dataset.id} already has a job running (job {job.id})", "code": "job_in_progress"}
   assert len(await stored_variables(session, dataset.id)) == 1
+
+
+# ---------------------------------------------------------------------------
+# PATCH /datasets/{dataset_id}/variables/{variable_id}
+# ---------------------------------------------------------------------------
+
+
+async def test_update_variable(client, session):
+  dataset = await add_dataset(session)
+  _, _, temperature, _ = await add_variables(session, dataset.id, *THERMISTOR_CHAIN)
+  response = await client.patch(f"/datasets/{dataset.id}/variables/{temperature.id}", json={"unit": "K", "sensor_id": None, "description": None})
+  assert response.status_code == 200
+  body = response.json()
+  assert (body["id"], body["name"], body["unit"], body["sensor_id"], body["description"]) == (temperature.id, "temperature", "K", None, None)
+  assert body["parameter_id"] == 5  # not sent, so unchanged
+  stored = {v.name: v for v in await stored_variables(session, dataset.id)}
+  assert (stored["temperature"].unit, stored["temperature"].sensor_id) == ("K", None)
+  assert await version(session, dataset) == 2
+
+
+async def test_update_variable_without_changes_keeps_the_version(client, session):
+  dataset = await add_dataset(session)
+  (time,) = await add_variables(session, dataset.id, TIME)
+  for changes in [{}, {"source_name": "time"}]:
+    response = await client.patch(f"/datasets/{dataset.id}/variables/{time.id}", json=changes)
+    assert response.status_code == 200
+  assert await version(session, dataset) == 1
+
+
+async def test_rename_coordinate(client, session):
+  """Renaming a coordinate renames it in its own dimensions and in those of the variables that use it. legacy_axis stays."""
+  dataset = await add_dataset(session)
+  _, depth, _, _ = await add_variables(session, dataset.id, TIME, with_fields(DEPTH, legacy_axis="y"), TEMPERATURE, TEMPERATURE_FLAG)
+  response = await client.patch(f"/datasets/{dataset.id}/variables/{depth.id}", json={"name": "z"})
+  assert response.status_code == 200
+  assert (response.json()["dimensions"], response.json()["legacy_axis"]) == (["z"], "y")
+  stored = {v.name: v.dimensions for v in await stored_variables(session, dataset.id)}
+  assert stored == {"time": ["time"], "z": ["z"], "temperature": ["time", "z"], "temperature_qual": ["time", "z"]}
+  assert await version(session, dataset) == 2
+
+
+async def test_rename_data_variable_renames_it_in_its_flags(client, session):
+  dataset = await add_dataset(session)
+  _, _, temperature, _ = await add_variables(session, dataset.id, *THERMISTOR_CHAIN)
+  response = await client.patch(f"/datasets/{dataset.id}/variables/{temperature.id}", json={"name": "water_temperature"})
+  assert response.status_code == 200
+  stored = {v.name: v.flag_for for v in await stored_variables(session, dataset.id)}
+  assert stored["temperature_qual"] == "water_temperature"
+
+
+async def test_rename_to_a_taken_name(client, session):
+  dataset = await add_dataset(session)
+  _, depth = await add_variables(session, dataset.id, TIME, DEPTH)
+  response = await client.patch(f"/datasets/{dataset.id}/variables/{depth.id}", json={"name": "time"})
+  assert response.status_code == 409
+  assert response.json() == {"detail": f"Dataset {dataset.id} already has a variable named time", "code": "already_exists"}
+
+
+@pytest.mark.parametrize(
+  ("variable", "changes", "detail"),
+  [
+    ("temperature", {"dimensions": ["time", "oxygen"]}, "temperature: dimension 'oxygen' is not a time or coordinate variable of dataset {id}"),
+    ("depth", {"name": "z", "dimensions": ["depth"]}, "z: dimension 'depth' is not a time or coordinate variable of dataset {id}"),
+    ("depth", {"role": "data"}, "depth: dimension 'depth' is not a time or coordinate variable of dataset {id}"),
+    ("temperature_qual", {"flag_for": None}, "temperature_qual: a flag variable needs flag_for, the name of the data variable it flags"),
+  ],
+  ids=[
+    "unknown_dimension",
+    "rename_with_old_dimension",
+    "coordinate_to_data_with_itself_as_dimension",
+    "flag_without_flag_for",
+  ],
+)
+async def test_update_variable_invalid(client, session, variable, changes, detail):
+  dataset = await add_dataset(session)
+  # depth has no other users here, so changing its role isn't blocked before the checks
+  chain = [TIME, DEPTH, TEMPERATURE, TEMPERATURE_FLAG] if variable != "depth" else [TIME, DEPTH]
+  stored = {v.name: v for v in await add_variables(session, dataset.id, *chain)}
+  response = await client.patch(f"/datasets/{dataset.id}/variables/{stored[variable].id}", json=changes)
+  assert response.status_code == 422
+  assert response.json() == {"detail": detail.format(id=dataset.id), "code": "validation_error"}
+  assert await version(session, dataset) == 1
+
+
+async def test_update_unknown_variable(client, session):
+  dataset, other = await add_dataset(session), await add_dataset(session)
+  (time,) = await add_variables(session, other.id, TIME)
+  for dataset_id, variable_id, detail in [
+    (dataset.id, 999, "Variable 999 not found"),
+    (dataset.id, time.id, f"Variable {time.id} not found"),  # a variable of another dataset
+    (999, time.id, "Dataset 999 not found"),
+  ]:
+    response = await client.patch(f"/datasets/{dataset_id}/variables/{variable_id}", json={"unit": "s"})
+    assert response.status_code == 404
+    assert response.json() == {"detail": detail, "code": "not_found"}
+
+
+async def test_update_variable_while_a_job_is_in_progress(client, session):
+  dataset = await add_dataset(session)
+  (time,) = await add_variables(session, dataset.id, TIME)
+  job = await add_job(session, dataset.id)
+  response = await client.patch(f"/datasets/{dataset.id}/variables/{time.id}", json={"unit": "s"})
+  assert response.status_code == 409
+  assert response.json() == {"detail": f"Dataset {dataset.id} already has a job running (job {job.id})", "code": "job_in_progress"}
