@@ -10,9 +10,11 @@ from app.schemas.variables import VariableBase
 class InspectRequest(BaseModel):
   """The file to inspect."""
 
-  file: str = Field(
+  file: str | None = Field(
+    default=None,
     min_length=1,
-    description="Path of a file in the dataset's archive, as listed by `GET /datasets/{dataset_id}/files`. Only NetCDF files (`.nc`) are supported.",
+    description="Path of a file in the dataset's archive, as listed by `GET /datasets/{dataset_id}/files`. Only NetCDF files (`.nc`) are supported. "
+    "Leave it out to inspect the first file of that list.",
     examples=["L2_ThermistorChain_202406.nc"],
   )
 

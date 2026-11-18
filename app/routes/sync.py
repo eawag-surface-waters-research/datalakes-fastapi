@@ -143,7 +143,7 @@ INSPECT_TIMEOUT = 10.0  # seconds reading a file may take
     **CONFLICT_RESPONSE,
     422: {
       "model": ErrorResponse,
-      "description": "The dataset has no source, the file isn't in its archive, or it can't be read.",
+      "description": "The dataset has no source or no files, the file isn't in its archive, or it can't be read.",
       "content": {
         "application/json": {
           "examples": {
@@ -151,6 +151,10 @@ INSPECT_TIMEOUT = 10.0  # seconds reading a file may take
             "link_dataset": {
               "summary": "The dataset is a link dataset",
               "value": {"detail": "Dataset 2 is a link dataset and can't be inspected", "code": "link_dataset"},
+            },
+            "no_files": {
+              "summary": "No file was given and the dataset has no files",
+              "value": {"detail": "Dataset 512 has no files. Fetch the dataset first.", "code": "no_files"},
             },
             "file_not_in_archive": {
               "summary": "The file isn't in the archive",
@@ -178,11 +182,12 @@ INSPECT_TIMEOUT = 10.0  # seconds reading a file may take
     },
   },
 )
-async def inspect_file(dataset_id: int, request: InspectRequest, session: SessionDep) -> InspectResult:
+async def inspect_file(dataset_id: int, session: SessionDep, request: InspectRequest | None = None) -> InspectResult:
   """
   Reads one file from the dataset's archive and suggests the dataset's variables and feature type, in the response.
   Only the file's metadata and a sample of its values are read. Fetch the dataset first, so that the file is in the archive,
-  and pick it from `GET /datasets/{dataset_id}/files`.
+  and pick it from `GET /datasets/{dataset_id}/files`. Without a `file` (or without a body), the first file of that list is inspected,
+  and 422 `no_files` is returned if there is none.
 
   The suggestions are not saved. Review them, then create the variables. `warnings` lists what to check first,
   e.g. time without CF units, placeholders for missing values or units spelled differently.
@@ -197,18 +202,28 @@ async def inspect_file(dataset_id: int, request: InspectRequest, session: Sessio
   await get_dataset_with_source(session, dataset_id, "inspected")
   await ensure_no_active_job(session, dataset_id)
 
-  # check if the file is in the index before trying to read it
-  indexed = (await session.exec(select(File.id).where(File.dataset_id == dataset_id, File.path == request.file))).first()
-  path = raw_dir(dataset_id) / request.file
-  if indexed is None or not path.is_file():
-    raise ApiError(422, "file_not_in_archive", f"File {request.file!r} is not in the archive of dataset {dataset_id}. Fetch the dataset first.")
+  files = select(File.path).where(File.dataset_id == dataset_id)
+  if request is None or request.file is None:
+    # the first file is used as fakkback if none is supplied
+    file = (await session.exec(files.order_by(col(File.path)).limit(1))).first()
+    if file is None:
+      raise ApiError(422, "no_files", f"Dataset {dataset_id} has no files. Fetch the dataset first.")
+    indexed = True
+  else:
+    # check if the file is in the index before trying to read it
+    file = request.file
+    indexed = (await session.exec(files.where(File.path == file))).first() is not None
+
+  path = raw_dir(dataset_id) / file
+  if not indexed or not path.is_file():
+    raise ApiError(422, "file_not_in_archive", f"File {file!r} is not in the archive of dataset {dataset_id}. Fetch the dataset first.")
 
   # run in a separate thread to avoid blocking the event loop
   try:
     async with asyncio.timeout(INSPECT_TIMEOUT):
       result = await asyncio.to_thread(inspection.inspect_file, path)
   except TimeoutError:
-    raise ApiError(504, "inspect_timeout", f"Reading {request.file!r} took longer than {INSPECT_TIMEOUT:g} s") from None
+    raise ApiError(504, "inspect_timeout", f"Reading {file!r} took longer than {INSPECT_TIMEOUT:g} s") from None
 
   parameters = (await session.exec(select(Parameter))).all()
   inspection.guess_parameters(result, parameters)

@@ -2098,7 +2098,7 @@ paths:
       operationId: inspectFile
       summary: Suggest variables from a sample file
       description: |
-        Reads one file from the dataset's archive and suggests the dataset's variables and feature type, in the response. Only the file's metadata and a small sample of its values are read. Fetch the dataset first, so that the file is in the archive, and pick it from `GET /datasets/{dataset_id}/files`.
+        Reads one file from the dataset's archive and suggests the dataset's variables and feature type, in the response. Only the file's metadata and a small sample of its values are read. Fetch the dataset first, so that the file is in the archive, and pick it from `GET /datasets/{dataset_id}/files`. Without a `file` (or without a body), the first file of that list is inspected, and 422 `no_files` is returned if there is none.
 
         The suggestions are not saved. Review them, then save them with `PUT /datasets/{dataset_id}/variables`.
 
@@ -2109,7 +2109,7 @@ paths:
 
         **Access:** user (own datasets) or owner.
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
@@ -2131,7 +2131,7 @@ paths:
         "409":
           $ref: "#/components/responses/Conflict"
         "422":
-          description: The dataset has no source, the file isn't in its archive, or it can't be read.
+          description: The dataset has no source or no files, the file isn't in its archive, or it can't be read.
           content:
             application/json:
               schema:
@@ -2142,6 +2142,11 @@ paths:
                   value:
                     detail: Dataset 512 has no source
                     code: no_source
+                no_files:
+                  summary: No file was given and the dataset has no files
+                  value:
+                    detail: Dataset 512 has no files. Fetch the dataset first.
+                    code: no_files
                 not_in_archive:
                   summary: The file isn't in the archive
                   value:
@@ -3895,11 +3900,11 @@ components:
     # -------------------------------------------------------------------------
     InspectRequest:
       type: object
-      required: [file]
       properties:
         file:
-          type: string
-          description: Path of a file in the dataset's archive, as listed by `GET /datasets/{dataset_id}/files`. Only NetCDF files (`.nc`) are supported.
+          type: [string, "null"]
+          minLength: 1
+          description: Path of a file in the dataset's archive, as listed by `GET /datasets/{dataset_id}/files`. Only NetCDF files (`.nc`) are supported. Leave it out to inspect the first file of that list.
           examples: [L2_ThermistorChain_202406.nc]
 
     SampleSummary:

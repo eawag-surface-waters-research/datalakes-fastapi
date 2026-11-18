@@ -92,6 +92,19 @@ async def test_inspect_file(client, session, filesystem):
   assert body["warnings"] == ["temp: placeholder values found in the sample, suggested decoding {'missing_values': [-9999]}."]
 
 
+@pytest.mark.parametrize("body", [None, {}, {"file": None}])
+async def test_inspect_first_file_by_default(client, session, filesystem, body):
+  """Without a file, the first file in the order of `GET /datasets/{dataset_id}/files` is inspected."""
+  dataset = await add_dataset(session)
+  await add_file(session, filesystem, dataset.id, "b.nc", content=b"# not read")
+  await add_file(session, filesystem, dataset.id, "a.nc")
+  other = await add_dataset(session)
+  await add_file(session, filesystem, other.id, "0.nc", content=b"# another dataset's file")
+  response = await client.post(f"/datasets/{dataset.id}/inspect", json=body)
+  assert response.status_code == 200
+  assert response.json()["file"] == "a.nc"
+
+
 async def test_inspect_file_that_is_not_netcdf(client, session, filesystem):
   dataset = await add_dataset(session)
   await add_file(session, filesystem, dataset.id, "README.md", content=b"# Thermistor chain")
@@ -109,8 +122,9 @@ async def test_inspect_broken_netcdf_file(client, session, filesystem):
   assert response.json()["detail"].startswith("File 'L2_ThermistorChain_202406.nc' can't be read as NetCDF")
 
 
-async def test_inspect_unknown_dataset(client):
-  response = await client.post("/datasets/999/inspect", json={"file": FILE})
+@pytest.mark.parametrize("body", [{"file": FILE}, None])
+async def test_inspect_unknown_dataset(client, body):
+  response = await client.post("/datasets/999/inspect", json=body)
   assert response.status_code == 404
   assert response.json() == {"detail": "Dataset 999 not found", "code": "not_found"}
 
