@@ -1,8 +1,10 @@
+from datetime import UTC, datetime
+
 import pytest
 from sqlmodel import col, select
 
 from app.enums import DatasetKind, JobStatus, JobType
-from app.models import Dataset, Job, Parameter, Sensor, Variable
+from app.models import Dataset, Issue, Job, Parameter, Sensor, Variable
 
 TIME = {"name": "time", "source_name": "time", "role": "time", "dimensions": ["time"], "parameter_id": 1}
 DEPTH = {"name": "depth", "source_name": "depth", "role": "coordinate", "dimensions": ["depth"], "unit": "m"}
@@ -345,3 +347,104 @@ async def test_add_variable_with_invalid_name(client, session):
   response = await client.post(f"/datasets/{dataset.id}/variables", json=with_fields(TIME, name="2nd_time"))
   assert response.status_code == 422
   assert response.json() == {"detail": "name: String should match pattern '^[a-z][a-z0-9_]*$'", "code": "validation_error"}
+
+
+# ---------------------------------------------------------------------------
+# GET /datasets/{dataset_id}/variables
+# ---------------------------------------------------------------------------
+
+
+async def test_list_variables(client, session):
+  """Time and coordinates first, then data and flag variables in the order they were added."""
+  dataset, other = await add_dataset(session), await add_dataset(session)
+  await add_variables(session, dataset.id, TEMPERATURE, TEMPERATURE_FLAG, DEPTH, with_fields(TIME, legacy_axis="x"))
+  await add_variables(session, other.id, TIME)
+  response = await client.get(f"/datasets/{dataset.id}/variables")
+  assert response.status_code == 200
+  body = response.json()
+  assert [(v["name"], v["legacy_axis"]) for v in body] == [("time", "x"), ("depth", None), ("temperature", None), ("temperature_qual", None)]
+  assert body[0]["parameter"] == {
+    "id": 1,
+    "name": "Time",
+    "cf_name": None,
+    "description": None,
+    "unit": None,
+    "characteristic": None,
+    "name_de": None,
+    "name_fr": None,
+    "name_it": None,
+  }
+  assert body[0]["sensor"] is None
+  assert body[2]["sensor"] == {"id": 7, "name": "TidBit MX2203", "manufacturer": None, "accuracy": None, "link": None}
+
+
+async def test_list_variables_of_dataset_without_variables(client, session):
+  dataset = await add_dataset(session, kind=DatasetKind.link)
+  response = await client.get(f"/datasets/{dataset.id}/variables")
+  assert response.status_code == 200
+  assert response.json() == []
+
+
+async def test_list_variables_of_unknown_dataset(client):
+  response = await client.get("/datasets/999/variables")
+  assert response.status_code == 404
+  assert response.json() == {"detail": "Dataset 999 not found", "code": "not_found"}
+
+
+# ---------------------------------------------------------------------------
+# DELETE /datasets/{dataset_id}/variables/{variable_id}
+# ---------------------------------------------------------------------------
+
+
+async def test_delete_variable(client, session):
+  dataset = await add_dataset(session)
+  _, _, temperature, flag = await add_variables(session, dataset.id, *THERMISTOR_CHAIN)
+  issue = Issue(dataset_id=dataset.id, variable_id=temperature.id, start=datetime(2024, 6, 1, tzinfo=UTC), type="sensor_fault")
+  session.add(issue)
+  await session.commit()
+  issue_id = issue.id
+  for variable in (flag, temperature):  # the flag first, as it flags the temperature
+    response = await client.delete(f"/datasets/{dataset.id}/variables/{variable.id}")
+    assert response.status_code == 204
+    assert response.content == b""
+  assert [v.name for v in await stored_variables(session, dataset.id)] == ["time", "depth"]
+  assert await session.get(Issue, issue_id) is None  # removed with its variable
+  assert await version(session, dataset) == 3
+
+
+async def test_delete_coordinate_that_is_a_dimension(client, session):
+  dataset = await add_dataset(session)
+  _, depth, _, _ = await add_variables(session, dataset.id, *THERMISTOR_CHAIN)
+  response = await client.delete(f"/datasets/{dataset.id}/variables/{depth.id}")
+  assert response.status_code == 409
+  assert response.json() == {"detail": "Variable 'depth' is a dimension of: temperature, temperature_qual", "code": "in_use"}
+  assert len(await stored_variables(session, dataset.id)) == 4
+  assert await version(session, dataset) == 1
+
+
+async def test_delete_data_variable_that_is_flagged(client, session):
+  dataset = await add_dataset(session)
+  _, _, temperature, _ = await add_variables(session, dataset.id, *THERMISTOR_CHAIN)
+  response = await client.delete(f"/datasets/{dataset.id}/variables/{temperature.id}")
+  assert response.status_code == 409
+  assert response.json() == {"detail": "Variable 'temperature' is flagged by: temperature_qual", "code": "in_use"}
+
+
+async def test_delete_unknown_variable(client, session):
+  dataset, other = await add_dataset(session), await add_dataset(session)
+  (time,) = await add_variables(session, other.id, TIME)
+  for dataset_id, variable_id in [(dataset.id, 999), (dataset.id, time.id)]:  # a variable of another dataset isn't found either
+    response = await client.delete(f"/datasets/{dataset_id}/variables/{variable_id}")
+    assert response.status_code == 404
+    assert response.json() == {"detail": f"Variable {variable_id} not found", "code": "not_found"}
+  assert len(await stored_variables(session, other.id)) == 1
+
+
+async def test_delete_variable_while_a_job_is_in_progress(client, session):
+  dataset = await add_dataset(session)
+  (time,) = await add_variables(session, dataset.id, TIME)
+  job = await add_job(session, dataset.id)
+  response = await client.delete(f"/datasets/{dataset.id}/variables/{time.id}")
+  assert response.status_code == 409
+  assert response.json() == {"detail": f"Dataset {dataset.id} already has a job running (job {job.id})", "code": "job_in_progress"}
+  assert len(await stored_variables(session, dataset.id)) == 1

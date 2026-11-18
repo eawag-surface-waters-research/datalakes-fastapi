@@ -875,25 +875,47 @@ paths:
       operationId: deleteVariable
       summary: Remove a variable
       description: |
-        Removes a variable. Increases the dataset's `version`.
+        Removes a variable. Increases the dataset's `version`. The issues about the variable are removed with it.
 
-        A coordinate that other variables use as a dimension can't be removed until they're removed or changed.
+        A coordinate that other variables use as a dimension can't be removed until they're removed or changed. Neither can a data variable that a flag variable names in `flag_for`.
+
+        The variables can't be changed while a fetch, sync or rebuild of the dataset is queued or running.
 
         **Access:** user (own datasets) or owner.
       responses:
         "204":
           description: The variable was removed.
         "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          description: Other variables use this coordinate as a dimension.
+          description: The dataset or the variable doesn't exist.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
               example:
-                detail: "Variable 'depth' is a dimension of: temperature, temperature_qual"
-                code: in_use
+                detail: Variable 999 not found
+                code: not_found
+        "409":
+          description: Other variables use this coordinate as a dimension, or flag this data variable, or a fetch, sync or rebuild of the dataset is queued or running.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                dimension:
+                  summary: The coordinate is a dimension of other variables
+                  value:
+                    detail: "Variable 'depth' is a dimension of: temperature, temperature_qual"
+                    code: in_use
+                flagged:
+                  summary: A flag variable flags this variable
+                  value:
+                    detail: "Variable 'temperature' is flagged by: temperature_qual"
+                    code: in_use
+                job_in_progress:
+                  summary: A job of the dataset is running
+                  value:
+                    detail: Dataset 123 already has a job running (job 5812)
+                    code: job_in_progress
 
   # ---------------------------------------------------------------------------
   # Sites

@@ -10,7 +10,9 @@ from app.database import SessionDep
 from app.enums import DatasetKind, VariableRole
 from app.errors import ApiError, ErrorResponse, not_found
 from app.models import Dataset, Parameter, Sensor, Variable
-from app.references import Reference, check_references
+from app.openapi import PUBLIC_TAG
+from app.params import Expand
+from app.references import Reference, check_references, expand_references
 from app.routes.sync import CONFLICT_RESPONSE, ensure_no_active_job
 from app.schemas import ParameterRead, SensorRead, VariableBase, VariableCreate, VariableRead
 
@@ -119,6 +121,78 @@ def names_by_role(variables: Iterable[VariableBase]) -> tuple[set[str], set[str]
 
 async def stored_variables(session: SessionDep, dataset_id: int) -> list[Variable]:
   return list((await session.exec(select(Variable).where(Variable.dataset_id == dataset_id).order_by(col(Variable.id)))).all())
+
+
+ROLE_ORDER = {VariableRole.time: 0, VariableRole.coordinate: 1, VariableRole.data: 2, VariableRole.flag: 2}  # data and flags keep their order
+
+TIME_PARAMETER = {"id": 1, "name": "Time", "cf_name": "time", "description": "Time of the measurement.", "unit": None, "characteristic": None}
+DEPTH_PARAMETER = {
+  "id": 2,
+  "name": "Depth",
+  "cf_name": "depth",
+  "description": "Distance below the water surface.",
+  "unit": "m",
+  "characteristic": "Physical",
+}
+TEMPERATURE_PARAMETER = {
+  "id": 5,
+  "name": "Water temperature",
+  "cf_name": "water_temperature",
+  "description": "In situ temperature of the water.",
+  "unit": "degC",
+  "characteristic": "Physical",
+}
+NO_TRANSLATIONS = {"name_de": None, "name_fr": None, "name_it": None}
+TIDBIT_SENSOR = {"id": 7, "name": "TidBit MX2203 calibrated", "manufacturer": "Onset (calibrated by Eawag)", "accuracy": "0.05", "link": None}
+
+
+@router.get(
+  "/{dataset_id}/variables",
+  response_model=list[VariableRead],
+  response_model_exclude_unset=True,  # leaves out the referenced objects unless they're expanded
+  summary="List a dataset's variables",
+  tags=[PUBLIC_TAG],
+  responses={
+    200: {
+      "description": "The variables.",
+      "content": {
+        "application/json": {
+          "example": [
+            {**read_example(901, {**TIME, "legacy_axis": "x"}), "parameter": {**TIME_PARAMETER, **NO_TRANSLATIONS}, "sensor": None},
+            {**read_example(902, {**DEPTH, "legacy_axis": "y"}), "parameter": {**DEPTH_PARAMETER, **NO_TRANSLATIONS}, "sensor": None},
+            {
+              **read_example(903, {**TEMPERATURE, "legacy_axis": "z"}),
+              "parameter": {**TEMPERATURE_PARAMETER, **NO_TRANSLATIONS},
+              "sensor": TIDBIT_SENSOR,
+            },
+            {**read_example(904, {**TEMPERATURE_FLAG, "legacy_axis": "z1"}), "parameter": None, "sensor": None},
+          ]
+        }
+      },
+    },
+    **NOT_FOUND_RESPONSE,
+  },
+)
+async def list_variables(dataset_id: int, session: SessionDep, expand: Expand = True):
+  """
+  Lists the variables of a dataset: coordinates (time, depth…) first, then data and flag variables.
+
+  Variables migrated from the old API have a `legacy_axis`.
+
+  - **Drafts:** their variables are returned like any other.
+  - **Link datasets** have no variables, so the list is empty.
+
+  Each variable has its `parameter` and `sensor` in full, unless `expand=false`.
+  """
+  if await session.get(Dataset, dataset_id) is None:
+    raise not_found("Dataset", dataset_id)
+
+  stored = sorted(await stored_variables(session, dataset_id), key=lambda v: ROLE_ORDER[v.role])  # stable, so each role stays ordered by ID
+  variables = [VariableRead.model_validate(v) for v in stored]
+  if expand:
+    await expand_references(session, variables, REFERENCES)
+
+  return variables
 
 
 @router.put(
@@ -340,3 +414,70 @@ async def create_variable(
   await session.refresh(created)
 
   return created
+
+
+@router.delete(
+  "/{dataset_id}/variables/{variable_id}",
+  status_code=204,
+  summary="Remove a variable",
+  responses={
+    204: {"description": "The variable was removed."},
+    404: {"model": ErrorResponse, "description": "The dataset or the variable doesn't exist."},
+    409: {
+      "model": ErrorResponse,
+      "description": (
+        "Other variables use this coordinate as a dimension, or flag this data variable, or a fetch, sync or rebuild of the dataset is queued or running."
+      ),
+      "content": {
+        "application/json": {
+          "examples": {
+            "dimension": {
+              "summary": "The coordinate is a dimension of other variables",
+              "value": {"detail": "Variable 'depth' is a dimension of: temperature, temperature_qual", "code": "in_use"},
+            },
+            "flagged": {
+              "summary": "A flag variable flags this variable",
+              "value": {"detail": "Variable 'temperature' is flagged by: temperature_qual", "code": "in_use"},
+            },
+            "job_in_progress": {
+              "summary": "A job of the dataset is running",
+              "value": {"detail": "Dataset 123 already has a job running (job 5812)", "code": "job_in_progress"},
+            },
+          }
+        }
+      },
+    },
+  },
+)
+async def delete_variable(dataset_id: int, variable_id: int, session: SessionDep):
+  """
+  Removes a variable. Increases the dataset's `version`. The issues about the variable are removed with it.
+
+  A coordinate that other variables use as a dimension can't be removed until they're removed or changed. Neither can a data variable that a
+  flag variable names in `flag_for`.
+
+  The variables can't be changed while a fetch, sync or rebuild of the dataset is queued or running.
+
+  **Access:** user (own datasets) or owner.
+  """
+  dataset = await session.get(Dataset, dataset_id, with_for_update=True)
+  if dataset is None:
+    raise not_found("Dataset", dataset_id)
+
+  variable = await session.get(Variable, variable_id)
+  if variable is None or variable.dataset_id != dataset_id:
+    raise not_found("Variable", variable_id)
+
+  await ensure_no_active_job(session, dataset_id)
+
+  others = [v for v in await stored_variables(session, dataset_id) if v.id != variable_id]
+  if referencing_variables := [v.name for v in others if variable.name in v.dimensions]:
+    raise ApiError(409, "in_use", f"Variable '{variable.name}' is a dimension of: {', '.join(referencing_variables)}")
+  if dependent_variables := [v.name for v in others if v.flag_for == variable.name]:
+    raise ApiError(409, "in_use", f"Variable '{variable.name}' is flagged by: {', '.join(dependent_variables)}")
+
+  await session.delete(variable)
+  dataset.version += 1
+  session.add(dataset)
+
+  await session.commit()
