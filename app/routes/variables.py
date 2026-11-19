@@ -45,8 +45,19 @@ TEMPERATURE_FLAG = {
   "description": "1 where the temperature failed the quality checks",
 }
 
+AIR_TEMPERATURE_2M = {
+  "name": "air_temperature_2m",
+  "source_name": "AirTC_2m",
+  "role": "data",
+  "dimensions": ["time"],
+  "unit": "degC",
+  "parameter_id": 6,
+  "detail": "at 2m",
+}
+
 VARIABLE_CREATE_EXAMPLES: dict[str, Example] = {
   "data": {"summary": "A data variable on time and depth", "value": TEMPERATURE},
+  "detail": {"summary": "One of several air temperatures, told apart by its detail", "value": AIR_TEMPERATURE_2M},
   "time": {"summary": "A time coordinate, decoded from the CF units in the file", "value": TIME},
   "flag": {"summary": "A quality flag for a data variable", "value": TEMPERATURE_FLAG},
   "legacy_axis": {"summary": "A variable that old links know as axis z", "value": {**TEMPERATURE, "legacy_axis": "z"}},
@@ -57,7 +68,7 @@ VARIABLE_LIST_EXAMPLES: dict[str, Example] = {
 
 
 def read_example(id: int, variable: dict) -> dict:
-  defaults = {"unit": None, "parameter_id": None, "flag_for": None, "description": None, "decoding": None, "legacy_axis": None}
+  defaults = {"unit": None, "parameter_id": None, "detail": None, "flag_for": None, "description": None, "decoding": None, "legacy_axis": None}
   return {"id": id, "dataset_id": 123, **defaults, **variable}
 
 

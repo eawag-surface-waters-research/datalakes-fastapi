@@ -29,7 +29,7 @@ THERMISTOR_CHAIN = [TIME, DEPTH, TEMPERATURE, TEMPERATURE_FLAG]
 
 @pytest.fixture(autouse=True)
 async def vocabularies(session):
-  session.add_all([Parameter(id=1, name="Time"), Parameter(id=5, name="Water temperature")])
+  session.add_all([Parameter(id=1, name="Time"), Parameter(id=5, name="Water temperature"), Parameter(id=6, name="Air Temperature")])
   await session.commit()
 
 
@@ -93,6 +93,7 @@ async def test_set_variables(client, session):
     "dimensions": ["time", "depth"],
     "unit": "degC",
     "parameter_id": 5,
+    "detail": None,
     "flag_for": None,
     "description": None,
     "decoding": {"missing_values": [-9999]},
@@ -270,6 +271,7 @@ async def test_add_variables_one_by_one(client, session):
     "dimensions": ["time", "depth"],
     "unit": None,
     "parameter_id": None,
+    "detail": None,
     "flag_for": "temperature",
     "description": None,
     "decoding": None,

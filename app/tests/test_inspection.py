@@ -77,6 +77,7 @@ def test_suggested_variable(tmp_path):
     "dimensions": ["time"],
     "unit": "degC",
     "parameter_id": None,
+    "detail": None,
     "flag_for": None,
     "description": "water temperature",
     "decoding": {"missing_values": [-9999]},

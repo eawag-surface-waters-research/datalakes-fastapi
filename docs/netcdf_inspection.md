@@ -109,6 +109,7 @@ Each variable that has at least one dimension becomes a suggestion with the fiel
 | `flag_for`     | The data variable a flag belongs to: from the data variable's CF `ancillary_variables`, otherwise by name (`temp_qual` → `temp`). Flags on `time` or `depth` aren't linked. |
 | `decoding`     | See below. Never set for time.                                                                                                                                              |
 | `parameter_id` | Guessed from the `parameters` vocabulary, see below.                                                                                                                        |
+| `detail`       | Not guessed yet, always `null`.                                                                                                                                             |
 
 ### Parameter (`parameter_id`)
 

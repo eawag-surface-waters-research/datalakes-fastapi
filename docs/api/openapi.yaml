@@ -505,6 +505,7 @@ paths:
                       dimensions: [time]
                       unit: null
                       parameter_id: 1
+                      detail: null
                       flag_for: null
                       legacy_axis: x
                       description: null
@@ -527,6 +528,7 @@ paths:
                       dimensions: [depth]
                       unit: m
                       parameter_id: 2
+                      detail: null
                       flag_for: null
                       legacy_axis: y
                       description: Depth of each logger below the surface
@@ -549,6 +551,7 @@ paths:
                       dimensions: [time, depth]
                       unit: degC
                       parameter_id: 5
+                      detail: null
                       flag_for: null
                       legacy_axis: z
                       description: Water temperature from the calibrated loggers
@@ -572,6 +575,7 @@ paths:
                       dimensions: [time, depth]
                       unit: null
                       parameter_id: 27
+                      detail: null
                       flag_for: temperature
                       legacy_axis: z1
                       description: 1 where the temperature failed the quality checks
@@ -736,6 +740,16 @@ paths:
                   description: Water temperature from the calibrated loggers
                   decoding:
                     missing_values: [-9999]
+              detail:
+                summary: One of several air temperatures, told apart by its detail
+                value:
+                  name: air_temperature_2m
+                  source_name: AirTC_2m
+                  role: data
+                  dimensions: [time]
+                  unit: degC
+                  parameter_id: 6
+                  detail: at 2m
               time:
                 summary: A time coordinate, decoded from the CF units in the file
                 value:
@@ -1458,6 +1472,7 @@ paths:
                     dimensions: [time, depth]
                     unit: degC
                     parameter_id: 5
+                    detail: null
                     flag_for: null
                     legacy_axis: z
                     description: Water temperature from the calibrated loggers
@@ -4412,6 +4427,9 @@ components:
           type: [integer, "null"]
           description: What the variable measures, from the `parameters` vocabulary.
           examples: [5]
+        detail:
+          type: [string, "null"]
+          description: Tells apart variables of the same parameter, e.g. `at 2m` and `at 4m` for two air temperatures.
         flag_for:
           type: [string, "null"]
           description: For `flag` variables, the name of the data variable they flag (required). `null` for other roles.
@@ -4451,7 +4469,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/VariableBase"
         - type: object
-          required: [id, dataset_id, name, source_name, role, dimensions, unit, parameter_id, flag_for, description, decoding, legacy_axis]
+          required: [id, dataset_id, name, source_name, role, dimensions, unit, parameter_id, detail, flag_for, description, decoding, legacy_axis]
           properties:
             id:
               type: integer
@@ -5853,6 +5871,7 @@ components:
             dimensions: [time]
             unit: null
             parameter_id: 1
+            detail: null
             flag_for: null
             legacy_axis: x
             description: null
@@ -5865,6 +5884,7 @@ components:
             dimensions: [depth]
             unit: m
             parameter_id: 2
+            detail: null
             flag_for: null
             legacy_axis: y
             description: Depth of each logger below the surface
@@ -5877,6 +5897,7 @@ components:
             dimensions: [time, depth]
             unit: degC
             parameter_id: 5
+            detail: null
             flag_for: null
             legacy_axis: z
             description: Water temperature from the calibrated loggers
@@ -5890,6 +5911,7 @@ components:
             dimensions: [time, depth]
             unit: null
             parameter_id: 27
+            detail: null
             flag_for: temperature
             legacy_axis: z1
             description: 1 where the temperature failed the quality checks
@@ -5984,6 +6006,7 @@ components:
         dimensions: [time, depth]
         unit: degC
         parameter_id: 5
+        detail: null
         flag_for: null
         legacy_axis: z
         description: Water temperature from the calibrated loggers
@@ -6205,6 +6228,7 @@ components:
             dimensions: [time]
             unit: null
             parameter_id: 1
+            detail: null
             flag_for: null
             description: time
             decoding: null
@@ -6219,6 +6243,7 @@ components:
             dimensions: [depth]
             unit: m
             parameter_id: 2
+            detail: null
             flag_for: null
             description: depth
             decoding: null
@@ -6233,6 +6258,7 @@ components:
             dimensions: [time, depth]
             unit: degC
             parameter_id: 5
+            detail: null
             flag_for: null
             description: Water temperature
             decoding:
@@ -6248,6 +6274,7 @@ components:
             dimensions: [time, depth]
             unit: null
             parameter_id: null
+            detail: null
             flag_for: temp
             description: Quality flag for temp
             decoding: null

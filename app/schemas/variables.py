@@ -11,6 +11,7 @@ from app.schemas.vocabularies import ParameterRead
 from app.sql import enum_type
 
 NAME_PATTERN = r"^[a-z][a-z0-9_]*$"
+DETAIL_DESCRIPTION = "Tells apart variables of the same parameter, e.g. `at 2m` and `at 4m` for two air temperatures. "
 
 
 class VariableBase(SQLModel):
@@ -20,6 +21,7 @@ class VariableBase(SQLModel):
   dimensions: list[str] = Field(min_length=1, sa_type=ARRAY(sa.String))
   unit: str | None = None
   parameter_id: int | None = Field(default=None, foreign_key="parameters.id", index=True)
+  detail: str | None = Field(default=None, description=DETAIL_DESCRIPTION, schema_extra={"examples": ["at 2m"]})
   flag_for: str | None = None
   description: str | None = None
   decoding: dict[str, Any] | None = Field(default=None, sa_type=JSONB)
@@ -55,6 +57,7 @@ class VariableUpdate(SQLModel):
   dimensions: list[str] | None = Field(default=None, min_length=1)
   unit: str | None = None
   parameter_id: int | None = None
+  detail: str | None = Field(default=None, description=DETAIL_DESCRIPTION, schema_extra={"examples": ["at 2m"]})
   flag_for: str | None = None
   description: str | None = None
   decoding: dict[str, Any] | None = None
