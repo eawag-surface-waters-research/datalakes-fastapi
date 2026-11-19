@@ -166,7 +166,7 @@ paths:
         - name: sort
           in: query
           description: |
-            - `title`: alphabetically.
+            - `title`: alphabetically. Datasets without a title come last.
             - `recent`: latest data first (by `time_end`). Datasets without data come last.
             - `downloads`: most downloaded first.
           schema:
@@ -4190,7 +4190,7 @@ components:
       description: The fields of a dataset that can be set.
       properties:
         title:
-          type: string
+          type: [string, "null"]
           minLength: 1
           examples: [LéXPLORE thermistor chain]
         description:
@@ -4279,7 +4279,6 @@ components:
       allOf:
         - $ref: "#/components/schemas/DatasetBase"
         - type: object
-          required: [title]
           properties:
             id:
               type: [integer, "null"]
@@ -4446,7 +4445,7 @@ components:
         id:
           type: integer
         title:
-          type: string
+          type: [string, "null"]
         kind:
           type: string
           enum: [data, link]
@@ -5399,7 +5398,7 @@ components:
         dataset_id:
           type: integer
         title:
-          type: string
+          type: [string, "null"]
         feature_type:
           $ref: "#/components/schemas/FeatureTypeName"
         site_id:

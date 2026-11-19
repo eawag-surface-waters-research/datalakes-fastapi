@@ -61,7 +61,7 @@ async def list_datasets(
   - `bbox` keeps the datasets whose `latitude` and `longitude` are inside the box. Datasets without a location are left out.
 
   `sort` is one of:
-  - `title`: alphabetically.
+  - `title`: alphabetically. Datasets without a title come last.
   - `recent`: latest data first (by `time_end`). Datasets without data come last.
   - `downloads`: most downloaded first.
 
@@ -94,7 +94,7 @@ async def list_datasets(
   elif sort == DatasetSort.downloads:
     query = query.order_by(col(Dataset.downloads).desc())
 
-  query = query.order_by(func.lower(Dataset.title), col(Dataset.id))  # to make the sort stable
+  query = query.order_by(func.lower(Dataset.title).nulls_last(), col(Dataset.id))  # to make the sort stable
 
   datasets = [DatasetRead.model_validate(dataset) for dataset in (await session.exec(query)).all()]
   if expand:
@@ -228,7 +228,7 @@ async def update_dataset(
   a request that changes nothing leaves it as it is.
 
   - `kind` can't be changed.
-  - `title` and `status` can't be `null`.
+  - `status` can't be `null`.
 
   The response has the IDs of the site, contact person, organisation and license only.
 

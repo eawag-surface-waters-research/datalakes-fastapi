@@ -14,7 +14,7 @@ from app.sql import enum_type
 
 
 class DatasetBase(SQLModel):
-  title: str = Field(min_length=1)
+  title: str | None = Field(default=None, min_length=1)
   description: str | None = None
   status: DatasetStatus = Field(
     default=DatasetStatus.draft, index=True, sa_type=enum_type(DatasetStatus, "dataset_status"), sa_column_kwargs={"server_default": "draft"}
@@ -85,10 +85,10 @@ class DatasetUpdate(SQLModel):
       raise invalid("kind can't be changed")
     return data
 
-  @field_validator("title", "status")
+  @field_validator("status")
   @classmethod
   def not_null(cls, value: Any) -> Any:
-    # only runs for fields that were sent, so a missing `title` is fine but `"title": null` isn't
+    # only runs for fields that were sent, so a missing `status` is fine but `"status": null` isn't
     if value is None:
       raise invalid("Can't be null")
     return value

@@ -89,6 +89,17 @@ async def test_create_dataset_with_existing_id_is_rejected(client):
   assert (await client.get(f"/datasets/{existing}")).json()["title"] == "Existing"
 
 
+async def test_create_dataset_without_title(client):
+  response = await client.post("/datasets", json={})
+  assert response.status_code == 201
+  assert response.json()["title"] is None
+
+
+async def test_create_dataset_with_empty_title_is_rejected(client):
+  response = await client.post("/datasets", json={"title": ""})
+  assert response.status_code == 422
+
+
 async def test_create_dataset_with_null_id_gets_an_automatic_id(client):
   response = await client.post("/datasets", json={"id": None, "title": "Data"})
   assert response.status_code == 201
@@ -239,6 +250,14 @@ async def test_list_datasets_sorting(client, session):
   assert [dataset["title"] for dataset in (await client.get("/datasets")).json()] == await titles("title")  # the default
 
 
+async def test_datasets_without_title_come_last(client, session):
+  session.add_all(
+    [Dataset(status=DatasetStatus.published), Dataset(title="b", status=DatasetStatus.published), Dataset(title="A", status=DatasetStatus.published)]
+  )
+  await session.flush()
+  assert [dataset["title"] for dataset in (await client.get("/datasets")).json()] == ["A", "b", None]
+
+
 @pytest.fixture
 async def catalogue(session):
   """Three published datasets that differ in everything the list can be filtered by: the Geneva one is in the collection."""
@@ -361,6 +380,13 @@ async def test_each_change_increases_the_version(client):
   await client.patch(f"/datasets/{created['id']}", json={"title": "First"})
   response = await client.patch(f"/datasets/{created['id']}", json={"title": "Second"})
   assert response.json()["version"] == 3
+
+
+async def test_update_clears_the_title(client):
+  created = await create(client)
+  response = await client.patch(f"/datasets/{created['id']}", json={"title": None})
+  assert response.status_code == 200
+  assert response.json()["title"] is None
 
 
 async def test_update_references(client, references):
