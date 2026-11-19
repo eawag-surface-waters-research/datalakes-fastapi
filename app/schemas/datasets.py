@@ -30,8 +30,6 @@ class DatasetBase(SQLModel):
   citation: str | None = None
   datasource_link: str | None = None
   plot_config: dict[str, Any] | None = Field(default=None, sa_type=JSONB)
-  update_interval: int | None = Field(default=None, ge=1)
-  sync_interval: int | None = Field(default=None, ge=1)
   latitude: float | None = Field(default=None, ge=-90, le=90)
   longitude: float | None = Field(default=None, ge=-180, le=180)
 
@@ -73,8 +71,6 @@ class DatasetUpdate(SQLModel):
   citation: str | None = None
   datasource_link: str | None = None
   plot_config: dict[str, Any] | None = None
-  update_interval: int | None = Field(default=None, ge=1)
-  sync_interval: int | None = Field(default=None, ge=1)
   latitude: float | None = Field(default=None, ge=-90, le=90)
   longitude: float | None = Field(default=None, ge=-180, le=180)
 

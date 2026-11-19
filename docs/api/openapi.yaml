@@ -87,7 +87,7 @@ tags:
   - name: Sources
     description: Where a dataset's files come from, either a folder in a public S3 bucket or a SWITCHdrive public share. A source is a single folder that holds the files directly, without subfolders. Sources are read anonymously, and configs containing credentials are rejected.
   - name: Sync
-    description: Fetch a dataset's files from its source, inspect a file in the archive to suggest variables, build the data from the archived files, and keep it up to date with syncs. Check whether a live dataset is up to date. Fetching, rebuilding and syncing run as jobs; inspecting answers at once.
+    description: Fetch a dataset's files from its source, inspect a file in the archive to suggest variables, build the data from the archived files, and keep it up to date with syncs. Fetching, rebuilding and syncing run as jobs; inspecting answers at once.
   - name: Jobs
     description: Background work run by the worker, with its status, progress, errors, log and result.
   - name: Files
@@ -205,8 +205,6 @@ paths:
                         colors: Rainbow
                         time_axis: x
                         map_marker: marker
-                      update_interval: 3600
-                      sync_interval: null
                       latitude: 46.5004
                       longitude: 6.6588
                       time_start: "2019-03-07T00:00:00Z"
@@ -401,10 +399,6 @@ paths:
                 summary: Publish a draft
                 value:
                   status: published
-              live:
-                summary: Mark as live, updated every 20 minutes
-                value:
-                  update_interval: 1200
       responses:
         "200":
           description: The updated dataset.
@@ -432,8 +426,6 @@ paths:
                     citation: null
                     datasource_link: null
                     plot_config: null
-                    update_interval: null
-                    sync_interval: null
                     latitude: null
                     longitude: null
                     time_start: null
@@ -2284,58 +2276,6 @@ paths:
                     detail: Dataset 512 has no variables
                     code: no_variables
 
-  /datasets/{dataset_id}/status:
-    parameters:
-      - $ref: "#/components/parameters/dataset_id"
-    get:
-      tags: [Sync]
-      operationId: getDatasetStatus
-      summary: Check whether a live dataset is up to date
-      description: |
-        Tells whether a live dataset is overdue: its latest data is older than `update_interval` seconds. Used by uptime monitoring.
-
-        Datasets without an `update_interval` aren't live, so they're never overdue. This includes link datasets.
-
-        **Access:** public.
-      responses:
-        "200":
-          description: The dataset's freshness.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DatasetStatus"
-              examples:
-                fresh:
-                  summary: Up to date
-                  value:
-                    dataset_id: 123
-                    live: true
-                    update_interval: 3600
-                    latest_data_at: "2024-10-30T09:50:00Z"
-                    overdue: false
-                    overdue_since: null
-                    last_sync:
-                      job_id: 5812
-                      status: succeeded
-                      finished_at: "2024-10-30T10:04:12Z"
-                    checked_at: "2024-10-30T10:15:00Z"
-                overdue:
-                  summary: Overdue since the last sync failed
-                  value:
-                    dataset_id: 123
-                    live: true
-                    update_interval: 3600
-                    latest_data_at: "2024-10-29T23:50:00Z"
-                    overdue: true
-                    overdue_since: "2024-10-30T00:50:00Z"
-                    last_sync:
-                      job_id: 5790
-                      status: failed
-                      finished_at: "2024-10-30T00:05:31Z"
-                    checked_at: "2024-10-30T10:15:00Z"
-        "404":
-          $ref: "#/components/responses/NotFound"
-
   # ---------------------------------------------------------------------------
   # Jobs
   # ---------------------------------------------------------------------------
@@ -3865,7 +3805,7 @@ components:
           description: "`true` when there are more than 100 files."
 
     # -------------------------------------------------------------------------
-    # Sync, inspect and status
+    # Sync and inspect
     # -------------------------------------------------------------------------
     InspectRequest:
       type: object
@@ -4022,49 +3962,6 @@ components:
           items:
             type: string
 
-    DatasetStatus:
-      type: object
-      description: Whether a live dataset is up to date.
-      required: [dataset_id, live, update_interval, latest_data_at, overdue, overdue_since, last_sync, checked_at]
-      properties:
-        dataset_id:
-          type: integer
-        live:
-          type: boolean
-          description: Whether the dataset has an `update_interval`.
-        update_interval:
-          type: [integer, "null"]
-          description: Expected seconds between updates.
-        latest_data_at:
-          type: [string, "null"]
-          format: date-time
-          description: Time of the latest value (the dataset's `time_end`).
-        overdue:
-          type: boolean
-          description: "`true` when `latest_data_at` is more than `update_interval` seconds ago. Always `false` for datasets that aren't live."
-        overdue_since:
-          type: [string, "null"]
-          format: date-time
-          description: When the dataset became overdue (`latest_data_at` + `update_interval`), or `null`.
-        last_sync:
-          description: The latest sync job that ended, or `null` if there was none.
-          anyOf:
-            - type: object
-              required: [job_id, status, finished_at]
-              properties:
-                job_id:
-                  type: integer
-                status:
-                  $ref: "#/components/schemas/JobStatus"
-                finished_at:
-                  type: string
-                  format: date-time
-            - type: "null"
-        checked_at:
-          type: string
-          format: date-time
-          description: When this answer was computed.
-
     # -------------------------------------------------------------------------
     # Files
     # -------------------------------------------------------------------------
@@ -4220,16 +4117,6 @@ components:
             - colors: Rainbow
               time_axis: x
               map_marker: marker
-        update_interval:
-          type: [integer, "null"]
-          minimum: 1
-          description: Expected seconds between updates for a live dataset, or `null` if it isn't updated regularly. Used to tell whether the dataset is overdue.
-          examples: [3600]
-        sync_interval:
-          type: [integer, "null"]
-          minimum: 1
-          description: Minutes between scheduled syncs, for datasets that no external caller syncs. `null` for no schedule.
-          examples: [60]
         latitude:
           type: [number, "null"]
           minimum: -90
@@ -4302,8 +4189,6 @@ components:
             - citation
             - datasource_link
             - plot_config
-            - update_interval
-            - sync_interval
             - latitude
             - longitude
             - time_start
@@ -5944,8 +5829,6 @@ components:
           colors: Rainbow
           time_axis: x
           map_marker: marker
-        update_interval: 3600
-        sync_interval: null
         latitude: 46.5004
         longitude: 6.6588
         time_start: "2019-03-07T00:00:00Z"
@@ -6065,8 +5948,6 @@ components:
         citation: null
         datasource_link: null
         plot_config: null
-        update_interval: null
-        sync_interval: null
         latitude: null
         longitude: null
         time_start: null
@@ -6102,8 +5983,6 @@ components:
         citation: null
         datasource_link: null
         plot_config: null
-        update_interval: null
-        sync_interval: null
         latitude: 46.45
         longitude: 6.55
         time_start: null

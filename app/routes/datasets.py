@@ -217,7 +217,6 @@ async def update_dataset(
     Body(
       openapi_examples={
         "publish": {"summary": "Publish a draft", "value": {"status": "published"}},
-        "live": {"summary": "Mark as live, updated every 20 minutes", "value": {"update_interval": 1200}},
       }
     ),
   ],

@@ -34,7 +34,6 @@ async def test_create_dataset_with_all_fields(client):
     "feature_type": "timeSeriesProfile",
     "origin": "measurement",
     "plot_config": {"colors": "Rainbow"},
-    "update_interval": 3600,
     "latitude": 46.5004,
     "longitude": 6.6588,
   }
