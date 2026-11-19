@@ -2546,8 +2546,6 @@ paths:
 
         **Issues and flags**: values are returned as stored, and the issues that overlap the request are listed in `issues`. Flag variables are returned when they're requested, like any variable. With `mask=true`, values covered by a problem (an issue with `category: problem`) or flagged as bad are replaced by `null`. Events never mask values.
 
-        **Plotting:** `resample` averages values over fixed steps, e.g. `1D`. `max_points` picks the smallest step from a fixed list (`10min`, `30min`, `1h`, `3h`, `6h`, `12h`, `1D`, `1W`, `1M`) that keeps the number of time steps under the limit. The step used is in `query.resample`.
-
         **Formats:** JSON by default. `format=csv` returns one row per time (and depth), `format=netcdf` a NetCDF4 file with CF attributes.
 
         **Size:** responses above about a certain size are refused with 413, pointing to `POST /exports` with the same query. A time range without data returns empty arrays.
@@ -2565,8 +2563,6 @@ paths:
         - $ref: "#/components/parameters/after"
         - $ref: "#/components/parameters/depth_min"
         - $ref: "#/components/parameters/depth_max"
-        - $ref: "#/components/parameters/resample"
-        - $ref: "#/components/parameters/max_points"
         - $ref: "#/components/parameters/mask"
         - $ref: "#/components/parameters/format"
         - $ref: "#/components/parameters/if_none_match"
@@ -4928,7 +4924,7 @@ components:
     DataQuery:
       type: object
       description: The query as it was answered, with defaults filled in.
-      required: [variables, start, end, depth_min, depth_max, resample, mask]
+      required: [variables, start, end, depth_min, depth_max, mask]
       properties:
         variables:
           type: array
@@ -4944,10 +4940,6 @@ components:
           type: [number, "null"]
         depth_max:
           type: [number, "null"]
-        resample:
-          type: [string, "null"]
-          description: The step used, either the one requested or the one chosen for `max_points`. `null` for the original values.
-          examples: [1D]
         mask:
           type: boolean
 
@@ -5275,10 +5267,6 @@ components:
           type: [number, "null"]
         depth_max:
           type: [number, "null"]
-        resample:
-          type: [string, "null"]
-          pattern: "^[0-9]+(min|h|D|W|M|Y)$"
-          examples: [1h]
         mask:
           type: boolean
           default: false
@@ -5630,24 +5618,6 @@ components:
         type: number
         minimum: 0
       example: 10
-    resample:
-      name: resample
-      in: query
-      description: |
-        Average the values over fixed time steps: a number and a unit, `min`, `h`, `D` (day), `W` (week), `M` (month) or `Y` (year). Steps start at midnight UTC. Flag variables take the worst flag in each step.
-      schema:
-        type: string
-        pattern: "^[0-9]+(min|h|D|W|M|Y)$"
-      example: 1D
-    max_points:
-      name: max_points
-      in: query
-      description: Most time steps to return. If there are more, the values are resampled with the smallest step from a fixed list that fits. Ignored when `resample` already gives few enough steps.
-      schema:
-        type: integer
-        minimum: 10
-        maximum: 100000
-      example: 2000
     mask:
       name: mask
       in: query
@@ -6304,7 +6274,6 @@ components:
           end: "2024-10-30T09:20:00Z"
           depth_min: null
           depth_max: null
-          resample: null
           mask: false
         coordinates:
           time:
@@ -6336,7 +6305,6 @@ components:
           end: "2024-03-01T00:10:00Z"
           depth_min: 0
           depth_max: 1.5
-          resample: null
           mask: false
         coordinates:
           time:
@@ -6367,7 +6335,6 @@ components:
           end: "2024-06-30T23:59:59Z"
           depth_min: 0
           depth_max: 1.5
-          resample: null
           mask: false
         coordinates:
           time:
@@ -6406,7 +6373,6 @@ components:
           end: "2024-05-14T08:32:00Z"
           depth_min: null
           depth_max: null
-          resample: null
           mask: false
         coordinates:
           time:
@@ -6455,7 +6421,6 @@ components:
           end: "2023-12-31"
           depth_min: null
           depth_max: null
-          resample: null
           mask: false
           format: netcdf
         status: queued
@@ -6482,7 +6447,6 @@ components:
           end: "2023-12-31"
           depth_min: null
           depth_max: null
-          resample: null
           mask: false
           format: netcdf
         status: ready
