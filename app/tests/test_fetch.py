@@ -18,7 +18,10 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.enums import FileStatus, JobStatus, JobType, SourceBackend
 from app.models import Dataset, File, Job, Source
 from app.storage import is_safe_relative_path
-from app.worker import enqueue
+from app.worker import JobContext, enqueue
+from app.worker.handlers import FetchHandler, NoParams, SyncHandler
+from app.worker.handlers.fetch import FetchResult
+from app.worker.handlers.sync import FETCH_PROGRESS
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -314,6 +317,35 @@ async def test_sync_fetches_first(worker_engine, make_worker, bucket, filesystem
   assert job.log.endswith("Processing isn't implemented yet: the fetched files stay `new`")
   assert archive(filesystem, dataset_id) == {"a.nc": "a" * 10, "b.nc": "b" * 5}
   assert {path: file.status for path, file in (await index(worker_engine, dataset_id)).items()} == {"a.nc": FileStatus.new, "b.nc": FileStatus.new}
+
+
+async def test_fetch_reports_only_its_part_of_a_syncs_progress(worker_engine, make_worker, filesystem):
+  seen: list[float | None] = []
+
+  async def report(context: JobContext, fraction: float) -> None:
+    await context.progress(fraction)
+    async with AsyncSession(worker_engine) as session:
+      job = await session.get(Job, context.job_id)
+    assert job is not None
+    seen.append(job.progress)
+
+  class StubFetch(FetchHandler):
+    async def run(self, context: JobContext, params: NoParams) -> FetchResult:
+      await report(context, 0.5)
+      await report(context, 1)
+      return FetchResult.model_validate(result())
+
+  handler = SyncHandler()
+  handler.fetch = StubFetch()
+  dataset_id = await add_dataset(worker_engine, None)
+  async with AsyncSession(worker_engine, expire_on_commit=False) as session:
+    job = await enqueue(session, JobType.sync, dataset_id=dataset_id)
+  await make_worker(handlers={JobType.sync: handler}).run_once()
+
+  assert seen == [FETCH_PROGRESS / 2, FETCH_PROGRESS]
+  async with AsyncSession(worker_engine) as session:
+    job = await session.get(Job, job.id)
+  assert job is not None and job.status == JobStatus.succeeded, job and job.error
 
 
 async def test_second_sync_copies_only_the_changes(worker_engine, make_worker, bucket, filesystem):

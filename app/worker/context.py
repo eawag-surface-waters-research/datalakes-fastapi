@@ -4,6 +4,8 @@ A context for a job handler, providing access to the job's information and ways 
 
 import asyncio
 import logging
+from collections.abc import Generator
+from contextlib import contextmanager
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
@@ -29,6 +31,8 @@ class JobContext:
     self._engine = engine
     self._conn: AsyncConnection | None = None
     self._lock = asyncio.Lock()  # one statement at a time on the connection, even if the handler logs from parallel tasks
+    self._progress_start: float = 0.0  # the part of the job's progress that `progress` reports, see `progress_range`
+    self._progress_end: float = 1.0
 
   async def _update(self, **values: Any) -> None:
     async with self._lock:
@@ -45,8 +49,27 @@ class JobContext:
     await self._update(log=line)
 
   async def progress(self, fraction: float) -> None:
-    """Sets how much of the job is done, from 0 to 1."""
-    await self._update(progress=min(max(fraction, 0.0), 1.0))
+    """Sets how much of the job is done, from 0 to 1. Inside `progress_range`, how much of that range is done."""
+    fraction = min(max(fraction, 0.0), 1.0)
+    await self._update(progress=self._progress_start + fraction * (self._progress_end - self._progress_start))
+
+  @contextmanager
+  def progress_range(self, start: float, end: float) -> Generator[None]:
+    """
+    Within the block, `progress` reports a part of the job: 0 to 1 becomes `start` to `end`.
+    Lets a handler run another handler as one step, e.g. a sync runs a fetch first.
+    """
+    if not 0 <= start <= end <= 1:
+      raise ValueError(f"Invalid progress range {start} to {end}")
+
+    outer = (self._progress_start, self._progress_end)  # save the outer range to restore it later
+    span = outer[1] - outer[0]
+    self._progress_start, self._progress_end = outer[0] + start * span, outer[0] + end * span  # set the new range
+
+    try:
+      yield  # run the block
+    finally:
+      self._progress_start, self._progress_end = outer  # restore the outer range
 
   async def close(self) -> None:
     if self._conn is not None:

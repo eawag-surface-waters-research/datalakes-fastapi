@@ -157,6 +157,60 @@ async def test_handler_gets_its_params_and_reports_progress(worker_engine, make_
   assert job.result == {"steps_done": 3}
 
 
+async def test_progress_range_reports_part_of_the_job(worker_engine, make_worker):
+  seen: list[float | None] = []
+
+  class PartsHandler(Handler[NoParams]):
+    type = JobType.test
+    params_model = NoParams
+
+    async def report(self, context: JobContext, fraction: float) -> None:
+      await context.progress(fraction)
+      seen.append((await get_job(worker_engine, context.job_id)).progress)
+
+    async def run(self, context: JobContext, params: NoParams) -> None:
+      with context.progress_range(0.2, 0.6):
+        await self.report(context, 0)
+        await self.report(context, 0.5)
+        await self.report(context, 7)  # clamped to the end of the range
+        with context.progress_range(0.5, 1):  # nested: the second half of 0.2 to 0.6
+          await self.report(context, 0.5)
+        await self.report(context, 1)  # the outer range again
+      await self.report(context, 0.9)  # the whole job again
+
+  job_id = await queue(worker_engine)
+  await make_worker(handlers={JobType.test: PartsHandler()}).run_once()
+  assert (await get_job(worker_engine, job_id)).status == JobStatus.succeeded
+  assert seen == pytest.approx([0.2, 0.4, 0.6, 0.5, 0.6, 0.9])
+
+
+async def test_progress_range_is_restored_after_an_error(worker_engine, make_worker):
+  seen: list[float | None] = []
+
+  class FailingPartHandler(Handler[NoParams]):
+    type = JobType.test
+    params_model = NoParams
+
+    async def run(self, context: JobContext, params: NoParams) -> None:
+      with pytest.raises(RuntimeError), context.progress_range(0, 0.5):
+        raise RuntimeError("step failed")
+      await context.progress(1)
+      seen.append((await get_job(worker_engine, context.job_id)).progress)
+
+  await queue(worker_engine)
+  await make_worker(handlers={JobType.test: FailingPartHandler()}).run_once()
+  assert seen == [1]
+
+
+@pytest.mark.parametrize(("start", "end"), [(-0.1, 0.5), (0.5, 1.1), (0.6, 0.4)])
+async def test_invalid_progress_range(worker_engine, start, end):
+  async with AsyncSession(worker_engine, expire_on_commit=False) as session:
+    job = await enqueue(session, JobType.test)
+  context = JobContext(worker_engine, job)
+  with pytest.raises(ValueError, match="Invalid progress range"), context.progress_range(start, end):
+    pass
+
+
 async def test_handler_without_result(worker_engine, make_worker):
   class QuietHandler(Handler[NoParams]):
     type = JobType.test
