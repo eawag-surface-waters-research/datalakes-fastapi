@@ -1,6 +1,6 @@
 from sqlmodel import Field
 
-from app.schemas.vocabularies import LicenseBase, OrganisationBase, ParameterBase, PersonBase, SensorBase, SiteTypeBase
+from app.schemas.vocabularies import LicenseBase, OrganisationBase, ParameterBase, PersonBase, SiteTypeBase
 
 
 class Parameter(ParameterBase, table=True):
@@ -15,11 +15,6 @@ class Organisation(OrganisationBase, table=True):
 
 class Person(PersonBase, table=True):
   __tablename__ = "persons"  # type: ignore[assignment]
-  id: int | None = Field(default=None, primary_key=True)
-
-
-class Sensor(SensorBase, table=True):
-  __tablename__ = "sensors"  # type: ignore[assignment]
   id: int | None = Field(default=None, primary_key=True)
 
 

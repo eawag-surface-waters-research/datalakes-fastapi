@@ -7,7 +7,7 @@ from sqlmodel import Field, SQLModel
 
 from app.enums import VariableRole
 from app.errors import invalid
-from app.schemas.vocabularies import ParameterRead, SensorRead
+from app.schemas.vocabularies import ParameterRead
 from app.sql import enum_type
 
 NAME_PATTERN = r"^[a-z][a-z0-9_]*$"
@@ -20,7 +20,6 @@ class VariableBase(SQLModel):
   dimensions: list[str] = Field(min_length=1, sa_type=ARRAY(sa.String))
   unit: str | None = None
   parameter_id: int | None = Field(default=None, foreign_key="parameters.id", index=True)
-  sensor_id: int | None = Field(default=None, foreign_key="sensors.id", index=True)
   flag_for: str | None = None
   description: str | None = None
   decoding: dict[str, Any] | None = Field(default=None, sa_type=JSONB)
@@ -56,7 +55,6 @@ class VariableUpdate(SQLModel):
   dimensions: list[str] | None = Field(default=None, min_length=1)
   unit: str | None = None
   parameter_id: int | None = None
-  sensor_id: int | None = None
   flag_for: str | None = None
   description: str | None = None
   decoding: dict[str, Any] | None = None
@@ -82,4 +80,3 @@ class VariableRead(VariableBase):
   dataset_id: int
   legacy_axis: str | None = Field(description=LEGACY_AXIS_DESCRIPTION)
   parameter: ParameterRead | None = Field(default=None, description="The parameter of `parameter_id`. Only with `expand=true`.")
-  sensor: SensorRead | None = Field(default=None, description="The sensor of `sensor_id`. Only with `expand=true`.")

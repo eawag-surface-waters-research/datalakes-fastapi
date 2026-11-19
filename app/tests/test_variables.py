@@ -4,7 +4,7 @@ import pytest
 from sqlmodel import col, select
 
 from app.enums import DatasetKind, JobStatus, JobType
-from app.models import Dataset, Issue, Job, Parameter, Sensor, Variable
+from app.models import Dataset, Issue, Job, Parameter, Variable
 
 TIME = {"name": "time", "source_name": "time", "role": "time", "dimensions": ["time"], "parameter_id": 1}
 DEPTH = {"name": "depth", "source_name": "depth", "role": "coordinate", "dimensions": ["depth"], "unit": "m"}
@@ -15,7 +15,6 @@ TEMPERATURE = {
   "dimensions": ["time", "depth"],
   "unit": "degC",
   "parameter_id": 5,
-  "sensor_id": 7,
   "decoding": {"missing_values": [-9999]},
 }
 TEMPERATURE_FLAG = {
@@ -30,7 +29,7 @@ THERMISTOR_CHAIN = [TIME, DEPTH, TEMPERATURE, TEMPERATURE_FLAG]
 
 @pytest.fixture(autouse=True)
 async def vocabularies(session):
-  session.add_all([Parameter(id=1, name="Time"), Parameter(id=5, name="Water temperature"), Sensor(id=7, name="TidBit MX2203")])
+  session.add_all([Parameter(id=1, name="Time"), Parameter(id=5, name="Water temperature")])
   await session.commit()
 
 
@@ -94,7 +93,6 @@ async def test_set_variables(client, session):
     "dimensions": ["time", "depth"],
     "unit": "degC",
     "parameter_id": 5,
-    "sensor_id": 7,
     "flag_for": None,
     "description": None,
     "decoding": {"missing_values": [-9999]},
@@ -244,15 +242,11 @@ async def test_set_invalid_variables(client, session, variables, detail):
   assert await version(session, dataset) == 1
 
 
-@pytest.mark.parametrize(
-  ("variable", "detail"),
-  [(with_fields(TEMPERATURE, parameter_id=999), "Parameter 999 not found"), (with_fields(TEMPERATURE, sensor_id=999), "Sensor 999 not found")],
-)
-async def test_set_variables_with_unknown_reference(client, session, variable, detail):
+async def test_set_variables_with_unknown_reference(client, session):
   dataset = await add_dataset(session)
-  response = await client.put(f"/datasets/{dataset.id}/variables", json=[TIME, DEPTH, variable])
+  response = await client.put(f"/datasets/{dataset.id}/variables", json=[TIME, DEPTH, with_fields(TEMPERATURE, parameter_id=999)])
   assert response.status_code == 422
-  assert response.json() == {"detail": detail, "code": "unknown_reference"}
+  assert response.json() == {"detail": "Parameter 999 not found", "code": "unknown_reference"}
   assert await stored_variables(session, dataset.id) == []
 
 
@@ -276,7 +270,6 @@ async def test_add_variables_one_by_one(client, session):
     "dimensions": ["time", "depth"],
     "unit": None,
     "parameter_id": None,
-    "sensor_id": None,
     "flag_for": "temperature",
     "description": None,
     "decoding": None,
@@ -374,8 +367,6 @@ async def test_list_variables(client, session):
     "name_fr": None,
     "name_it": None,
   }
-  assert body[0]["sensor"] is None
-  assert body[2]["sensor"] == {"id": 7, "name": "TidBit MX2203", "manufacturer": None, "accuracy": None, "link": None}
 
 
 async def test_list_variables_of_dataset_without_variables(client, session):
@@ -458,13 +449,13 @@ async def test_delete_variable_while_a_job_is_in_progress(client, session):
 async def test_update_variable(client, session):
   dataset = await add_dataset(session)
   _, _, temperature, _ = await add_variables(session, dataset.id, *THERMISTOR_CHAIN)
-  response = await client.patch(f"/datasets/{dataset.id}/variables/{temperature.id}", json={"unit": "K", "sensor_id": None, "description": None})
+  response = await client.patch(f"/datasets/{dataset.id}/variables/{temperature.id}", json={"unit": "K", "decoding": None})
   assert response.status_code == 200
   body = response.json()
-  assert (body["id"], body["name"], body["unit"], body["sensor_id"], body["description"]) == (temperature.id, "temperature", "K", None, None)
+  assert (body["id"], body["name"], body["unit"], body["decoding"]) == (temperature.id, "temperature", "K", None)
   assert body["parameter_id"] == 5  # not sent, so unchanged
   stored = {v.name: v for v in await stored_variables(session, dataset.id)}
-  assert (stored["temperature"].unit, stored["temperature"].sensor_id) == ("K", None)
+  assert (stored["temperature"].unit, stored["temperature"].decoding) == ("K", None)
   assert await version(session, dataset) == 2
 
 

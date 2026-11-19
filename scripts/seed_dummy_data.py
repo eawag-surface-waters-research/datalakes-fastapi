@@ -1,6 +1,6 @@
 """
-Copies the sites, collections, persons, organisations, licenses, parameters and sensors of the old Datalakes database into the new one, with
-their IDs preserved.
+Copies the sites, collections, persons, organisations, licenses and parameters of the old Datalakes database into the new one, with their
+IDs preserved.
 Lakes become sites of type `lake`, projects become collections.
 
 The old database is read from `--source`, else `OLD_DATABASE_URL`, else a `datalakes_old` database next to the API's.
@@ -30,12 +30,12 @@ from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.database import DATABASE_URL, engine
-from app.models import Collection, License, Organisation, Parameter, Person, Sensor, Site, SiteType
+from app.models import Collection, License, Organisation, Parameter, Person, Site, SiteType
 
 PARAMETERS_FILE = Path(__file__).parent / "seed_data" / "parameters.json"
 
 # In the order they can be inserted: sites need site types, collections need sites, persons need organisations
-MODELS: list[type[SQLModel]] = [SiteType, Site, Collection, Organisation, Person, License, Parameter, Sensor]
+MODELS: list[type[SQLModel]] = [SiteType, Site, Collection, Organisation, Person, License, Parameter]
 
 # The old tables and the columns that are read
 OLD_COLUMNS = {
@@ -45,7 +45,6 @@ OLD_COLUMNS = {
   "persons": "id, name, organisations_id, email",
   "licenses": "id, name, description, link",
   "parameters": "id, name, cfname, unit, characteristic, description, german, french, italian",
-  "sensors": "id, name, manufacturer, accuracy, link",
 }
 
 SITE_TYPES = [{"name": "lake", "description": "A body of standing water"}]
@@ -153,7 +152,6 @@ def convert(old: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, An
     "persons": persons,
     "licenses": one_per_name(old["licenses"])[0],
     "parameters": parameters,
-    "sensors": one_per_name(old["sensors"])[0],
   }
   for table, by_id in OVERRIDES.items():
     for row in new[table]:

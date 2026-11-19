@@ -8,18 +8,17 @@ from sqlmodel import col, select
 from app.database import SessionDep
 from app.enums import DatasetKind, VariableRole
 from app.errors import ApiError, ErrorResponse, not_found
-from app.models import Dataset, Parameter, Sensor, Variable
+from app.models import Dataset, Parameter, Variable
 from app.openapi import PUBLIC_TAG
 from app.params import Expand
 from app.references import Reference, check_references, expand_references
 from app.routes.sync import CONFLICT_RESPONSE, ensure_no_active_job
-from app.schemas import ParameterRead, SensorRead, VariableBase, VariableCreate, VariableRead, VariableUpdate
+from app.schemas import ParameterRead, VariableBase, VariableCreate, VariableRead, VariableUpdate
 
 router = APIRouter(prefix="/datasets", tags=["Variables"])
 
 REFERENCES: dict[str, Reference] = {
   "parameter_id": Reference("Parameter", Parameter, ParameterRead),
-  "sensor_id": Reference("Sensor", Sensor, SensorRead),
 }
 
 AXIS_ROLES = (VariableRole.time, VariableRole.coordinate)  # the roles a dimension can name
@@ -34,7 +33,6 @@ TEMPERATURE = {
   "dimensions": ["time", "depth"],
   "unit": "degC",
   "parameter_id": 5,
-  "sensor_id": 7,
   "description": "Water temperature from the calibrated loggers",
   "decoding": {"missing_values": [-9999]},
 }
@@ -59,7 +57,7 @@ VARIABLE_LIST_EXAMPLES: dict[str, Example] = {
 
 
 def read_example(id: int, variable: dict) -> dict:
-  defaults = {"unit": None, "parameter_id": None, "sensor_id": None, "flag_for": None, "description": None, "decoding": None, "legacy_axis": None}
+  defaults = {"unit": None, "parameter_id": None, "flag_for": None, "description": None, "decoding": None, "legacy_axis": None}
   return {"id": id, "dataset_id": 123, **defaults, **variable}
 
 
@@ -145,7 +143,6 @@ TEMPERATURE_PARAMETER = {
   "characteristic": "Physical",
 }
 NO_TRANSLATIONS = {"name_de": None, "name_fr": None, "name_it": None}
-TIDBIT_SENSOR = {"id": 7, "name": "TidBit MX2203 calibrated", "manufacturer": "Onset (calibrated by Eawag)", "accuracy": "0.05", "link": None}
 
 
 @router.get(
@@ -160,14 +157,13 @@ TIDBIT_SENSOR = {"id": 7, "name": "TidBit MX2203 calibrated", "manufacturer": "O
       "content": {
         "application/json": {
           "example": [
-            {**read_example(901, {**TIME, "legacy_axis": "x"}), "parameter": {**TIME_PARAMETER, **NO_TRANSLATIONS}, "sensor": None},
-            {**read_example(902, {**DEPTH, "legacy_axis": "y"}), "parameter": {**DEPTH_PARAMETER, **NO_TRANSLATIONS}, "sensor": None},
+            {**read_example(901, {**TIME, "legacy_axis": "x"}), "parameter": {**TIME_PARAMETER, **NO_TRANSLATIONS}},
+            {**read_example(902, {**DEPTH, "legacy_axis": "y"}), "parameter": {**DEPTH_PARAMETER, **NO_TRANSLATIONS}},
             {
               **read_example(903, {**TEMPERATURE, "legacy_axis": "z"}),
               "parameter": {**TEMPERATURE_PARAMETER, **NO_TRANSLATIONS},
-              "sensor": TIDBIT_SENSOR,
             },
-            {**read_example(904, {**TEMPERATURE_FLAG, "legacy_axis": "z1"}), "parameter": None, "sensor": None},
+            {**read_example(904, {**TEMPERATURE_FLAG, "legacy_axis": "z1"}), "parameter": None},
           ]
         }
       },
@@ -184,7 +180,7 @@ async def list_variables(dataset_id: int, session: SessionDep, expand: Expand = 
   - **Drafts:** their variables are returned like any other.
   - **Link datasets** have no variables, so the list is empty.
 
-  Each variable has its `parameter` and `sensor` in full, unless `expand=false`.
+  Each variable has its `parameter` in full, unless `expand=false`.
   """
   if await session.get(Dataset, dataset_id) is None:
     raise not_found("Dataset", dataset_id)
@@ -204,7 +200,7 @@ async def list_variables(dataset_id: int, session: SessionDep, expand: Expand = 
   summary="Set all of a dataset's variables",
   responses={
     200: {
-      "description": "The dataset's variables, in the order sent. `parameter` and `sensor` aren't expanded.",
+      "description": "The dataset's variables, in the order sent. `parameter` isn't expanded.",
       "content": {
         "application/json": {
           "example": [read_example(901, TIME), read_example(902, DEPTH), read_example(903, TEMPERATURE), read_example(904, TEMPERATURE_FLAG)]
@@ -252,7 +248,7 @@ async def set_variables(
   - each `name` is used once, and so is each `legacy_axis`,
   - each of the `dimensions` names a `time` or `coordinate` variable of the list (a coordinate can name itself),
   - a `flag` variable names a `data` variable of the list in `flag_for`,
-  - `parameter_id` and `sensor_id` exist in their vocabularies.
+  - `parameter_id` exists in the parameters vocabulary.
 
   Variables are matched to the stored ones by `name`. A stored variable with the same name is updated and keeps its `id`,
   a new name adds a variable, and a stored variable whose name isn't in the list is removed. An empty list removes all variables.
@@ -487,7 +483,7 @@ async def update_variable(
     VariableUpdate,
     Body(
       openapi_examples={
-        "unit_and_sensor": {"summary": "Set the unit and the sensor", "value": {"unit": "degC", "sensor_id": 7}},
+        "unit": {"summary": "Set the unit", "value": {"unit": "degC"}},
         "rename": {"summary": "Rename a coordinate", "value": {"name": "depth_below_surface"}},
       }
     ),

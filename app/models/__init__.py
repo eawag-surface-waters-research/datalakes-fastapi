@@ -9,7 +9,7 @@ from app.models.maintenance import CatalogueVersion, SyncToken
 from app.models.sites import Site
 from app.models.sources import Source
 from app.models.variables import Variable
-from app.models.vocabularies import License, Organisation, Parameter, Person, Sensor, SiteType
+from app.models.vocabularies import License, Organisation, Parameter, Person, SiteType
 
 __all__ = [
   "CatalogueVersion",
@@ -26,7 +26,6 @@ __all__ = [
   "Parameter",
   "Person",
   "RegenerateRun",
-  "Sensor",
   "Site",
   "SiteType",
   "Source",

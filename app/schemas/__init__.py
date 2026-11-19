@@ -19,8 +19,6 @@ from app.schemas.vocabularies import (
   ParameterRead,
   PersonBase,
   PersonRead,
-  SensorBase,
-  SensorRead,
   SiteTypeBase,
 )
 
@@ -48,8 +46,6 @@ __all__ = [
   "PersonBase",
   "PersonRead",
   "RegenerateRunBase",
-  "SensorBase",
-  "SensorRead",
   "SiteBase",
   "SiteRead",
   "SiteTypeBase",

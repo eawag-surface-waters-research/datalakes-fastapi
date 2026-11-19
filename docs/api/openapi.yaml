@@ -74,7 +74,7 @@ tags:
   - name: Datasets
     description: Find, create, update and delete datasets. Published datasets are listed. Drafts are left out of lists but can be read by ID. Link datasets only point to an external page.
   - name: Variables
-    description: The variables of a dataset, with their name in the source files, role, dimensions, unit, parameter and sensor.
+    description: The variables of a dataset, with their name in the source files, role, dimensions, unit and parameter.
   - name: Sites
     description: Places where data is measured, such as lakes, rivers or stations.
   - name: Collections
@@ -82,7 +82,7 @@ tags:
   - name: Issues
     description: What affected a dataset's data during a period, limited to a time range and optionally to a variable or a depth range. Either a problem with the data, such as maintenance, a sensor fault or a calibration, or an event that explains it, such as a storm or ice cover.
   - name: Vocabularies
-    description: Shared lists used in metadata, such as parameters, organisations, persons, sensors, licenses, site types, feature types and variable roles.
+    description: Shared lists used in metadata, such as parameters, organisations, persons, licenses, site types, feature types and variable roles.
   # Ingestion
   - name: Sources
     description: Where a dataset's files come from, either a folder in a public S3 bucket or a SWITCHdrive public share. A source is a single folder that holds the files directly, without subfolders. Sources are read anonymously, and configs containing credentials are rejected.
@@ -489,7 +489,7 @@ paths:
         - **Drafts:** their variables are returned like any other.
         - **Link datasets** have no variables, so the list is empty.
 
-        Each variable has its `parameter` and `sensor` in full, unless `expand=false`.
+        Each variable has its `parameter` in full, unless `expand=false`.
 
         **Access:** public.
       parameters:
@@ -513,7 +513,6 @@ paths:
                       dimensions: [time]
                       unit: null
                       parameter_id: 1
-                      sensor_id: null
                       flag_for: null
                       legacy_axis: x
                       description: null
@@ -528,7 +527,6 @@ paths:
                         name_de: Zeit
                         name_fr: Temps
                         name_it: Tempo
-                      sensor: null
                     - id: 902
                       dataset_id: 123
                       name: depth
@@ -537,7 +535,6 @@ paths:
                       dimensions: [depth]
                       unit: m
                       parameter_id: 2
-                      sensor_id: null
                       flag_for: null
                       legacy_axis: y
                       description: Depth of each logger below the surface
@@ -552,7 +549,6 @@ paths:
                         name_de: Tiefe
                         name_fr: Profondeur
                         name_it: Profondità
-                      sensor: null
                     - id: 903
                       dataset_id: 123
                       name: temperature
@@ -561,7 +557,6 @@ paths:
                       dimensions: [time, depth]
                       unit: degC
                       parameter_id: 5
-                      sensor_id: 7
                       flag_for: null
                       legacy_axis: z
                       description: Water temperature from the calibrated loggers
@@ -577,12 +572,6 @@ paths:
                         name_de: Wassertemperatur
                         name_fr: Température de l'eau
                         name_it: Temperatura dell'acqua
-                      sensor:
-                        id: 7
-                        name: TidBit MX2203 calibrated
-                        manufacturer: Onset (calibrated by Eawag)
-                        accuracy: "0.05"
-                        link: null
                     - id: 904
                       dataset_id: 123
                       name: temperature_qual
@@ -591,7 +580,6 @@ paths:
                       dimensions: [time, depth]
                       unit: null
                       parameter_id: 27
-                      sensor_id: null
                       flag_for: temperature
                       legacy_axis: z1
                       description: 1 where the temperature failed the quality checks
@@ -606,7 +594,6 @@ paths:
                         name_de: null
                         name_fr: null
                         name_it: null
-                      sensor: null
         "404":
           $ref: "#/components/responses/NotFound"
     put:
@@ -620,7 +607,7 @@ paths:
         - each `name` is used once, and so is each `legacy_axis`,
         - each of the `dimensions` names a `time` or `coordinate` variable of the list (a coordinate can name itself),
         - a `flag` variable names a `data` variable of the list in `flag_for`,
-        - `parameter_id` and `sensor_id` exist in their vocabularies.
+        - `parameter_id` exists in the `parameters` vocabulary.
 
         Variables are matched to the stored ones by `name`. A stored variable with the same name is updated and keeps its `id`, a new name adds a variable, and a stored variable whose name isn't in the list is removed. An empty list removes all variables.
 
@@ -661,7 +648,6 @@ paths:
                     dimensions: [time, depth]
                     unit: degC
                     parameter_id: 5
-                    sensor_id: 7
                     description: Water temperature from the calibrated loggers
                     decoding:
                       missing_values: [-9999]
@@ -673,7 +659,7 @@ paths:
                     description: 1 where the temperature failed the quality checks
       responses:
         "200":
-          description: The dataset's variables, in the order sent. `parameter` and `sensor` aren't expanded.
+          description: The dataset's variables, in the order sent. `parameter` isn't expanded.
           content:
             application/json:
               schema:
@@ -755,7 +741,6 @@ paths:
                   dimensions: [time, depth]
                   unit: degC
                   parameter_id: 5
-                  sensor_id: 7
                   description: Water temperature from the calibrated loggers
                   decoding:
                     missing_values: [-9999]
@@ -852,7 +837,7 @@ paths:
               $ref: "#/components/schemas/VariableUpdate"
             example:
               unit: degC
-              sensor_id: 7
+              parameter_id: 5
       responses:
         "200":
           description: The updated variable.
@@ -912,9 +897,9 @@ paths:
                     detail: "legacy_axis can't be changed: it can only be set when the variable is added"
                     code: validation_error
                 unknown_reference:
-                  summary: The sensor doesn't exist
+                  summary: The parameter doesn't exist
                   value:
-                    detail: Sensor 999 not found
+                    detail: Parameter 999 not found
                     code: unknown_reference
     delete:
       tags: [Variables]
@@ -1481,7 +1466,6 @@ paths:
                     dimensions: [time, depth]
                     unit: degC
                     parameter_id: 5
-                    sensor_id: 7
                     flag_for: null
                     legacy_axis: z
                     description: Water temperature from the calibrated loggers
@@ -1681,11 +1665,6 @@ paths:
                   fixed: false
                   entry_count: 1
                   url: /vocabularies/persons
-                - name: sensors
-                  description: Sensors that variables are measured with.
-                  fixed: false
-                  entry_count: 16
-                  url: /vocabularies/sensors
                 - name: licenses
                   description: Licenses that datasets are published under.
                   fixed: false
@@ -1752,11 +1731,11 @@ paths:
       operationId: createVocabularyEntry
       summary: Add an entry to a vocabulary
       description: |
-        Adds an entry to a vocabulary. The body depends on the vocabulary, e.g. a parameter or a sensor.
+        Adds an entry to a vocabulary. The body depends on the vocabulary, e.g. a parameter or a person.
 
         `feature_types` and `variable_roles` are fixed, because the API depends on their values: adding to them returns 422.
 
-        **Access:** user, because a new dataset may need a new sensor or person.
+        **Access:** user, because a new dataset may need a new parameter or person.
       requestBody:
         required: true
         content:
@@ -1764,13 +1743,6 @@ paths:
             schema:
               $ref: "#/components/schemas/VocabularyEntryCreate"
             examples:
-              sensor:
-                summary: A sensor
-                value:
-                  name: RBR Solo-T
-                  manufacturer: RBR
-                  accuracy: "0.002 °C"
-                  link: https://rbr-global.com/products/standard-loggers/rbrsolo-t/
               site_type:
                 summary: A site type
                 value:
@@ -1784,11 +1756,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/VocabularyEntry"
               example:
-                id: 17
-                name: RBR Solo-T
-                manufacturer: RBR
-                accuracy: "0.002 °C"
-                link: https://rbr-global.com/products/standard-loggers/rbrsolo-t/
+                name: reservoir
+                description: An artificial lake behind a dam.
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -1798,7 +1767,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
               example:
-                detail: The sensors vocabulary already has an entry named 'RBR Solo-T'
+                detail: The site_types vocabulary already has an entry named 'reservoir'
                 code: already_exists
         "422":
           description: The entry is invalid, or the vocabulary is fixed.
@@ -4560,10 +4529,6 @@ components:
           type: [integer, "null"]
           description: What the variable measures, from the `parameters` vocabulary.
           examples: [5]
-        sensor_id:
-          type: [integer, "null"]
-          description: The sensor used, from the `sensors` vocabulary.
-          examples: [7]
         flag_for:
           type: [string, "null"]
           description: For `flag` variables, the name of the data variable they flag (required). `null` for other roles.
@@ -4603,7 +4568,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/VariableBase"
         - type: object
-          required: [id, dataset_id, name, source_name, role, dimensions, unit, parameter_id, sensor_id, flag_for, description, decoding, legacy_axis]
+          required: [id, dataset_id, name, source_name, role, dimensions, unit, parameter_id, flag_for, description, decoding, legacy_axis]
           properties:
             id:
               type: integer
@@ -4617,11 +4582,6 @@ components:
               description: The parameter of `parameter_id`, or `null`. Only with `expand=true`.
               anyOf:
                 - $ref: "#/components/schemas/Parameter"
-                - type: "null"
-            sensor:
-              description: The sensor of `sensor_id`, or `null`. Only with `expand=true`.
-              anyOf:
-                - $ref: "#/components/schemas/Sensor"
                 - type: "null"
 
     VariableList:
@@ -4992,34 +4952,6 @@ components:
                 - $ref: "#/components/schemas/Organisation"
                 - type: "null"
 
-    SensorBase:
-      type: object
-      required: [name]
-      properties:
-        name:
-          type: string
-          examples: [TidBit MX2203 calibrated]
-        manufacturer:
-          type: [string, "null"]
-          examples: [Onset (calibrated by Eawag)]
-        accuracy:
-          type: [string, "null"]
-          description: Accuracy as stated by the manufacturer, free text.
-          examples: ["0.05"]
-        link:
-          type: [string, "null"]
-          format: uri
-
-    Sensor:
-      allOf:
-        - $ref: "#/components/schemas/SensorBase"
-        - type: object
-          required: [id]
-          properties:
-            id:
-              type: integer
-              examples: [7]
-
     LicenseBase:
       type: object
       required: [name]
@@ -5062,7 +4994,7 @@ components:
       properties:
         name:
           type: string
-          enum: [parameters, organisations, persons, sensors, licenses, site_types, feature_types, variable_roles]
+          enum: [parameters, organisations, persons, licenses, site_types, feature_types, variable_roles]
         description:
           type: string
         fixed:
@@ -5075,7 +5007,7 @@ components:
           type: string
           format: uri-reference
           description: Where the entries are listed.
-          examples: [/vocabularies/sensors]
+          examples: [/vocabularies/parameters]
 
     VocabularyList:
       type: array
@@ -5088,7 +5020,6 @@ components:
         - $ref: "#/components/schemas/Parameter"
         - $ref: "#/components/schemas/Organisation"
         - $ref: "#/components/schemas/Person"
-        - $ref: "#/components/schemas/Sensor"
         - $ref: "#/components/schemas/License"
         - $ref: "#/components/schemas/NamedEntry"
 
@@ -5098,7 +5029,6 @@ components:
         - $ref: "#/components/schemas/ParameterBase"
         - $ref: "#/components/schemas/OrganisationBase"
         - $ref: "#/components/schemas/PersonBase"
-        - $ref: "#/components/schemas/SensorBase"
         - $ref: "#/components/schemas/LicenseBase"
         - $ref: "#/components/schemas/NamedEntry"
 
@@ -5720,8 +5650,8 @@ components:
       description: Name of the vocabulary.
       schema:
         type: string
-        enum: [parameters, organisations, persons, sensors, licenses, site_types, feature_types, variable_roles]
-      example: sensors
+        enum: [parameters, organisations, persons, licenses, site_types, feature_types, variable_roles]
+      example: parameters
     job_id:
       name: job_id
       in: path
@@ -6066,7 +5996,6 @@ components:
             dimensions: [time]
             unit: null
             parameter_id: 1
-            sensor_id: null
             flag_for: null
             legacy_axis: x
             description: null
@@ -6079,7 +6008,6 @@ components:
             dimensions: [depth]
             unit: m
             parameter_id: 2
-            sensor_id: null
             flag_for: null
             legacy_axis: y
             description: Depth of each logger below the surface
@@ -6092,7 +6020,6 @@ components:
             dimensions: [time, depth]
             unit: degC
             parameter_id: 5
-            sensor_id: 7
             flag_for: null
             legacy_axis: z
             description: Water temperature from the calibrated loggers
@@ -6106,7 +6033,6 @@ components:
             dimensions: [time, depth]
             unit: null
             parameter_id: 27
-            sensor_id: null
             flag_for: temperature
             legacy_axis: z1
             description: 1 where the temperature failed the quality checks
@@ -6205,7 +6131,6 @@ components:
         dimensions: [time, depth]
         unit: degC
         parameter_id: 5
-        sensor_id: 7
         flag_for: null
         legacy_axis: z
         description: Water temperature from the calibrated loggers
@@ -6427,7 +6352,6 @@ components:
             dimensions: [time]
             unit: null
             parameter_id: 1
-            sensor_id: null
             flag_for: null
             description: time
             decoding: null
@@ -6442,7 +6366,6 @@ components:
             dimensions: [depth]
             unit: m
             parameter_id: 2
-            sensor_id: null
             flag_for: null
             description: depth
             decoding: null
@@ -6457,7 +6380,6 @@ components:
             dimensions: [time, depth]
             unit: degC
             parameter_id: 5
-            sensor_id: null
             flag_for: null
             description: Water temperature
             decoding:
@@ -6473,7 +6395,6 @@ components:
             dimensions: [time, depth]
             unit: null
             parameter_id: null
-            sensor_id: null
             flag_for: temp
             description: Quality flag for temp
             decoding: null

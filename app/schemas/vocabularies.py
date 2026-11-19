@@ -23,13 +23,6 @@ class PersonBase(SQLModel):
   email: str | None = None
 
 
-class SensorBase(SQLModel):
-  name: str = Field(unique=True)
-  manufacturer: str | None = None
-  accuracy: str | None = None
-  link: str | None = None
-
-
 class LicenseBase(SQLModel):
   name: str = Field(unique=True)
   description: str | None = None
@@ -54,8 +47,4 @@ class LicenseRead(LicenseBase):
 
 
 class ParameterRead(ParameterBase):
-  id: int
-
-
-class SensorRead(SensorBase):
   id: int
