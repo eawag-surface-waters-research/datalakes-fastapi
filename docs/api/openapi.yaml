@@ -80,7 +80,7 @@ tags:
   - name: Collections
     description: Groups of datasets, e.g. a project or a platform such as LéXPLORE.
   - name: Issues
-    description: What affected a dataset's data during a period, limited to a time range and optionally to a variable or a depth range. Either a problem with the data, such as maintenance, a sensor fault or a calibration, or an event that explains it, such as a storm or ice cover.
+    description: What affected a dataset's data during a period, limited to a time range and optionally to a variable or a depth range. Either a problem with the data, such as maintenance, a sensor fault or a calibration, or an event that explains it, such as a storm or ice cover. Issues are for information only and never mask data.
   - name: Vocabularies
     description: Shared lists used in metadata, such as parameters, organisations, persons, licenses, site types, feature types and variable roles.
   # Ingestion
@@ -1489,8 +1489,10 @@ paths:
       description: |
         Reports something that affected a dataset's data during a period. Increases the dataset's `version`.
 
-        - A **problem** (`category: problem`, the default) means the data is wrong or unreliable: maintenance, a sensor fault, a calibration… It has a `state`, and `mask=true` on the data endpoint hides the values it covers.
-        - An **event** (`category: event`) explains data that is correct: a storm, ice cover… It has no `state` and is never masked.
+        Issues are for information only: they never mask data. The data endpoint lists the issues that overlap a request next to the values.
+
+        - A **problem** (`category: problem`, the default) means the data is wrong or unreliable: maintenance, a sensor fault, a calibration… It has a `state`.
+        - An **event** (`category: event`) explains data that is correct: a storm, ice cover… It has no `state`.
 
         For both:
 
@@ -2544,7 +2546,7 @@ paths:
 
         **One cast:** for a profile dataset, `nearest`, `before` or `after` returns a single cast instead of a time range: the cast closest to a date, or the one just before or after a given time. These parameters can't be combined with each other or with `start` and `end` (400).
 
-        **Issues and flags**: values are returned as stored, and the issues that overlap the request are listed in `issues`. Flag variables are returned when they're requested, like any variable. With `mask=true`, values covered by a problem (an issue with `category: problem`) or flagged as bad are replaced by `null`. Events never mask values.
+        **Issues and flags**: values are returned as stored, and the issues that overlap the request are listed in `issues`. Flag variables are returned when they're requested, like any variable. With `mask=true`, values flagged as bad are replaced by `null`. Issues never mask values: they're for information only.
 
         **Formats:** JSON by default. `format=csv` returns one row per time (and depth), `format=netcdf` a NetCDF4 file with CF attributes.
 
@@ -2654,7 +2656,7 @@ paths:
       description: |
         Returns the latest valid value of each variable, with its time. For a variable with depth, it's the latest time step with any valid value, with the values at each depth (`null` where that depth had none). For profile datasets, it's the latest cast.
 
-        Values are never masked here: a value covered by an open problem is still returned, and the issue is listed in `issues`.
+        Issues never mask values: a value covered by an open problem is still returned, and the issue is listed in `issues`.
 
         - **Drafts:** work like any other dataset.
         - **Link datasets** have no data here (404 with code `link_dataset`).
@@ -4638,8 +4640,10 @@ components:
     IssueCategory:
       type: string
       description: |
-        - `problem`: the data is wrong or unreliable, e.g. maintenance, a sensor fault or a calibration. Masked by `mask=true`.
-        - `event`: the data is correct, and the event explains it, e.g. a storm or ice cover. Never masked.
+        - `problem`: the data is wrong or unreliable, e.g. maintenance, a sensor fault or a calibration.
+        - `event`: the data is correct, and the event explains it, e.g. a storm or ice cover.
+
+        Neither masks data: issues are for information only.
       enum: [problem, event]
 
     IssueState:
@@ -5621,7 +5625,7 @@ components:
     mask:
       name: mask
       in: query
-      description: "Replace values covered by a problem (an issue with `category: problem`) or flagged as bad with `null`. Events never mask values."
+      description: "Replace values flagged as bad with `null`. Issues never mask values."
       schema:
         type: boolean
         default: false

@@ -9,7 +9,7 @@ from app.sql import created_at_field, enum_type, updated_at_field
 
 
 class Issue(IssueBase, table=True):
-  """A problem with a dataset's data (has a state, masked by `mask=true`) or an event that explains it (no state, never masked)."""
+  """A problem with a dataset's data (has a state) or an event that explains it (no state). For information only: issues never mask data."""
 
   __tablename__ = "issues"  # type: ignore[assignment]
   __table_args__ = (sa.Index("ix_issues_dataset_id_start", "dataset_id", "start"),)
