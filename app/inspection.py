@@ -16,6 +16,7 @@ from typing import Any, Literal
 
 import numpy as np
 import xarray as xr
+from xarray.coding.times import decode_cf_datetime
 
 from app.enums import FeatureType, VariableRole
 from app.errors import ApiError
@@ -273,15 +274,15 @@ def _time_range(name: str, var: xr.Variable, sample: np.ndarray, warnings: list[
 
   calendar = _text(var.attrs.get("calendar"))
   try:
-    first, last = xr.coding.times.decode_cf_datetime(np.array([values.min(), values.max()]), units, calendar)
-    start, end = _datetime(first), _datetime(last)
+    first, last = decode_cf_datetime(np.array([values.min(), values.max()]), units, calendar)
+    start, end = utc_datetime(first), utc_datetime(last)
   except (ValueError, OverflowError, TypeError) as exc:
     warnings.append(f"invalid_time_units: '{name}' can't be decoded with units {units!r}: {exc}")
     return None, order
   return TimeRange(start=start, end=end, count=int(var.size), units=units, calendar=calendar), order
 
 
-def _datetime(value: Any) -> datetime:
+def utc_datetime(value: Any) -> datetime:
   """A UTC datetime from a decoded time: a numpy datetime64, or a cftime date for other calendars."""
   if isinstance(value, np.datetime64):
     return value.astype("datetime64[us]").item().replace(tzinfo=UTC)
