@@ -7,8 +7,7 @@ import xarray as xr
 
 from app.enums import FeatureType, VariableRole
 from app.errors import ApiError
-from app.inspection import guess_parameters, inspect_file
-from app.models import Parameter
+from app.inspection import inspect_file
 
 UNIX_UNITS = "seconds since 1970-01-01 00:00:00"
 TIMES = np.array([1_700_000_000, 1_700_000_600, 1_700_001_200, 1_700_001_800], dtype="float64")
@@ -358,65 +357,3 @@ def test_unreadable_netcdf(tmp_path):
     inspect_file(path)
   assert (error.value.status_code, error.value.code) == (422, "unreadable_file")
   assert error.value.detail.startswith("File 'broken.nc' can't be read as NetCDF")
-
-
-PARAMETERS = [
-  Parameter(id=1, name="Time", cf_name="time"),
-  Parameter(id=2, name="Depth", cf_name="depth"),
-  Parameter(id=5, name="Water temperature", cf_name="water_temperature"),
-  Parameter(id=22, name="Oxygen Saturation", cf_name="water_oxygen_saturation"),
-  Parameter(id=38, name="Salinity", cf_name="salinity"),
-  Parameter(id=140, name="Total organic carbon", cf_name=None),
-]
-
-
-def guessed(ds: xr.Dataset, tmp_path: Path, parameters=PARAMETERS):
-  """The guessed parameter IDs by source_name, and only the warnings that guessing added."""
-  result = inspect_file(write(tmp_path, ds))
-  before = len(result.warnings)
-  guess_parameters(result, parameters)
-  return {v.source_name: v.parameter_id for v in result.variables}, result.warnings[before:]
-
-
-def test_parameters_are_guessed_from_standard_name_long_name_and_name(tmp_path):
-  ds = time_series_profile()
-  ds["temp"].attrs["standard_name"] = "water_temperature"  # standard_name against cf_name
-  ds["o2"] = ("time", np.ones(4), {"long_name": "Oxygen saturation"})  # long_name against the name
-  ds["sal"] = ("time", np.ones(4), {"long_name": "salinity"})  # long_name against cf_name
-  ds["Total Organic Carbon"] = ("time", np.ones(4))  # name in the file, without cf_name
-  ids, warnings = guessed(ds, tmp_path)
-  assert ids == {"time": 1, "depth": 2, "temp": 5, "mixed_layer": None, "o2": 22, "sal": 38, "Total Organic Carbon": 140}
-  assert warnings == []
-
-
-def test_standard_name_comes_before_long_name(tmp_path):
-  ds = time_series_profile()
-  ds["temp"].attrs.update(standard_name="salinity", long_name="Water temperature")
-  assert guessed(ds, tmp_path)[0]["temp"] == 38
-
-
-def test_no_match_leaves_parameter_empty(tmp_path):
-  ds = time_series_profile()
-  ds["temp"].attrs.update(standard_name="sea_water_temperature", long_name="temperature")
-  ids, warnings = guessed(ds, tmp_path)
-  assert ids["temp"] is None
-  assert warnings == []
-
-
-def test_several_matches_warn_and_guess_nothing(tmp_path):
-  parameters = [*PARAMETERS, Parameter(id=68, name="Surface temperature", cf_name="water_temperature")]
-  ds = time_series_profile()
-  ds["temp"].attrs["long_name"] = "Water temperature"
-  ids, warnings = guessed(ds, tmp_path, parameters)
-  assert ids["temp"] is None
-  assert "temp: 'Water temperature' matches several parameters: 'Surface temperature' (68), 'Water temperature' (5). Pick one." in warnings
-
-
-def test_flags_are_not_guessed(tmp_path):
-  ds = time_series_profile()
-  ds["salinity_qual"] = ("time", np.zeros(4, dtype="int8"), {"long_name": "salinity"})
-  assert guessed(ds, tmp_path)[0]["salinity_qual"] is None
-
-
-def test_no_parameters(tmp_path):
-  assert set(guessed(time_series_profile(), tmp_path, [])[0].values()) == {None}

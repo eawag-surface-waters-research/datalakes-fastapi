@@ -66,7 +66,13 @@ async def add_job(session, dataset_id: int, type: JobType, status: JobStatus) ->
 async def test_inspect_file(client, session, filesystem):
   dataset = await add_dataset(session)
   await add_file(session, filesystem, dataset.id, FILE)
-  session.add_all([Parameter(id=1, name="Time", cf_name="time"), Parameter(id=5, name="Water temperature", cf_name="water_temperature")])
+  session.add_all(
+    [
+      Parameter(id=1, name="Time", cf_name="time"),
+      Parameter(id=2, name="Depth", cf_name="depth"),
+      Parameter(id=5, name="Water temperature", cf_name="water_temperature"),
+    ]
+  )
   await session.commit()
   response = await client.post(f"/datasets/{dataset.id}/inspect", json={"file": FILE})
   assert response.status_code == 200
@@ -80,7 +86,7 @@ async def test_inspect_file(client, session, filesystem):
   assert body["global_attributes"] == {"title": "Thermistor chain", "latitude": 46.5, "longitude": 6.66}
   assert [(v["name"], v["role"], v["parameter_id"]) for v in body["variables"]] == [
     ("time", "time", 1),
-    ("depth", "coordinate", None),
+    ("depth", "coordinate", 2),
     ("temp", "data", 5),
   ]
   temp = body["variables"][2]

@@ -3,7 +3,7 @@ import asyncio
 from fastapi import APIRouter
 from sqlmodel import col, select
 
-from app import inspection
+from app import inspection, matching
 from app.database import SessionDep
 from app.enums import DatasetKind, JobStatus, JobType
 from app.errors import ApiError, ErrorResponse, not_found
@@ -298,5 +298,5 @@ async def inspect_file(dataset_id: int, session: SessionDep, request: InspectReq
     raise ApiError(504, "inspect_timeout", f"Reading {file!r} took longer than {INSPECT_TIMEOUT:g} s") from None
 
   parameters = (await session.exec(select(Parameter))).all()
-  inspection.guess_parameters(result, parameters)
+  matching.guess_parameters(result, parameters)
   return result

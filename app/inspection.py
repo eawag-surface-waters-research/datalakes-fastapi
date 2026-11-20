@@ -10,7 +10,6 @@ See `docs/netcdf_inspection.md` for the rules.
 
 import math
 import re
-from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -20,7 +19,6 @@ import xarray as xr
 
 from app.enums import FeatureType, VariableRole
 from app.errors import ApiError
-from app.models import Parameter
 from app.schemas.inspect import InspectedVariable, InspectResult, Location, SampleSummary, ScalarVariable, TimeRange
 
 SAMPLE_SIZE = 100_000  # number of values to read per variable, evenly spaced over every dimension
@@ -153,55 +151,6 @@ def inspect_file(path: Path, sample_size: int = SAMPLE_SIZE) -> InspectResult:
       global_attributes={str(name): _plain(value) for name, value in ds.attrs.items()},
       warnings=warnings,
     )
-
-
-def guess_parameters(result: InspectResult, parameters: Iterable[Parameter]) -> None:
-  """
-  Sets each variable's `parameter_id` from the `parameters` vocabulary. Flags aren't guessed.
-  Tried in this order, and the first one that matches anything decides:
-  1. the variable's standard_name against the parameters' cf_name,
-  2. its long_name against the parameters' name or cf_name,
-  3. its name in the file against the parameters' name or cf_name.
-
-  Names are compared without case, spaces or punctuation, e.g. "Water Temperature" matches "water_temperature".
-  If several parameters match, none is set and a warning names them.
-  """
-  by_cf_name: dict[str, list[Parameter]] = {}  # normalised cf_name -> parameters
-  by_any_name: dict[str, list[Parameter]] = {}  # normalised name or cf_name -> parameters
-  for parameter in parameters:
-    for key in {_normalise(parameter.name), _normalise(parameter.cf_name)} - {""}:
-      by_any_name.setdefault(key, []).append(parameter)
-    if cf_name := _normalise(parameter.cf_name):
-      by_cf_name.setdefault(cf_name, []).append(parameter)
-
-  for variable in result.variables:
-    if variable.role == VariableRole.flag:
-      continue
-
-    candidates = [
-      (variable.attributes.get("standard_name"), by_cf_name),
-      (variable.attributes.get("long_name"), by_any_name),
-      (variable.source_name, by_any_name),
-    ]
-    for text, index in candidates:
-      matches = index.get(_normalise(text), [])
-      if len(matches) == 1:
-        # exactly one parameter matches, so set the variable's parameter_id
-        variable.parameter_id = matches[0].id
-      elif matches:
-        # several parameters match, so warn and don't set the variable's parameter_id
-        names = ", ".join(sorted(f"'{p.name}' ({p.id})" for p in matches))
-        result.warnings.append(f"{variable.source_name}: {text!r} matches several parameters: {names}. Pick one.")
-      if matches:
-        # stop after the first match attempt
-        break
-
-
-def _normalise(text: Any) -> str:
-  """Lowercased, with every run of other characters than letters and digits replaced by `_`, e.g. "Water Temperature" -> "water_temperature"."""
-  if not isinstance(text, str):
-    return ""
-  return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
 
 
 def _format(path: Path) -> Literal["netcdf3", "netcdf4"]:

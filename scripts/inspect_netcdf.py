@@ -3,7 +3,7 @@ Inspects one local NetCDF file and prints the suggested feature type and variabl
 
 uv run python -m scripts.inspect_netcdf path/to/file.nc [--json] [--sample-size 100000] [--parameters scripts/seed_data/parameters.json]
 
-The rules are in `app/inspection.py`. Parameters are guessed from a JSON file of the `parameters` vocabulary (by default `seed_data/parameters.json`,
+The rules are in `app/inspection.py` and `app/matching.py`. Parameters are guessed from a JSON file of the `parameters` vocabulary (by default `seed_data/parameters.json`,
 written by `scripts/seed_dummy_data.py --export-parameters`), so no database is needed. Nothing is saved.
 """
 
@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from app.errors import ApiError
-from app.inspection import SAMPLE_SIZE, guess_parameters, inspect_file
+from app.inspection import SAMPLE_SIZE, inspect_file
+from app.matching import guess_parameters
 from app.models import Parameter
 from app.schemas.inspect import InspectResult
 

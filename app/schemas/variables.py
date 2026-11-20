@@ -11,7 +11,7 @@ from app.schemas.vocabularies import ParameterRead
 from app.sql import enum_type
 
 NAME_PATTERN = r"^[a-z][a-z0-9_]*$"
-DETAIL_DESCRIPTION = "Tells apart variables of the same parameter, e.g. `at 2m` and `at 4m` for two air temperatures. "
+DETAIL_DESCRIPTION = "Tells apart variables of the same parameter, e.g. `at 2m` and `at 4m` for two air temperatures."
 
 
 class VariableBase(SQLModel):

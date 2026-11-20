@@ -4,7 +4,8 @@ Inspection reads one NetCDF file and suggests the dataset's feature type and var
 
 | Where                                                                                 | What                                                                                                                                                                                                                                                                                            |
 | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`app/inspection.py`](../app/inspection.py)                                           | The rules below. `inspect_file(path)` reads the file, `guess_parameters(result, parameters)` fills in `parameter_id`.                                                                                                                                                                           |
+| [`app/inspection.py`](../app/inspection.py)                                           | The rules below. `inspect_file(path)` reads the file.                                                                                                                                                                                                                                           |
+| [`app/matching.py`](../app/matching.py)                                               | `guess_parameters(result, parameters)` fills in `parameter_id`, see [Parameter](#parameter-parameter_id).                                                                                                                                                                                       |
 | `POST /datasets/{dataset_id}/inspect` ([`app/routes/sync.py`](../app/routes/sync.py)) | Checks that the file is in the dataset's archive (the first file by path if none is given), reads it in a thread with a 10 s limit (504 `inspect_timeout`), and guesses parameters from the `parameters` table. The response is `InspectResult` in [`docs/api/openapi.yaml`](api/openapi.yaml). |
 | [`scripts/inspect_netcdf.py`](../scripts/inspect_netcdf.py)                           | The same for a local file, without a database. Parameters are guessed from `scripts/seed_data/parameters.json`, written by `scripts/seed_dummy_data.py --export-parameters`.                                                                                                                    |
 
@@ -109,17 +110,20 @@ Each variable that has at least one dimension becomes a suggestion with the fiel
 | `flag_for`     | The data variable a flag belongs to: from the data variable's CF `ancillary_variables`, otherwise by name (`temp_qual` → `temp`). Flags on `time` or `depth` aren't linked. |
 | `decoding`     | See below. Never set for time.                                                                                                                                              |
 | `parameter_id` | Guessed from the `parameters` vocabulary, see below.                                                                                                                        |
-| `detail`       | Not guessed yet, always `null`.                                                                                                                                             |
+| `detail`       | Not guessed, always `null`. Set it by hand to tell apart variables of the same parameter, e.g. `at 2m` and `at 4m`.                                                         |
 
 ### Parameter (`parameter_id`)
 
-The `parameters` vocabulary is searched in this order, and the first step that matches anything decides:
+Done by [`app/matching.py`](../app/matching.py). The variable's `standard_name`, `long_name` and name in the file are compared with each parameter's name, `cf_name` and translations (`name_de`, `name_fr`, `name_it`). Each parameter gets a score from 0 to 100 for its best match:
 
-1. the variable's `standard_name` against the parameters' `cf_name`,
-2. its `long_name` against the parameters' name or `cf_name`,
-3. its name in the file against the parameters' name or `cf_name`.
+- **100**: the `standard_name` is the parameter's `cf_name` (without case, spaces or punctuation, so `Water_Temperature` matches `water_temperature`).
+- **up to 95**: a fuzzy match of the names. Before comparing, the variable's name is read in two ways, and the better one counts:
+  - as written, e.g. `pH`,
+  - with camelCase split, abbreviations spelled out and units, statistics and heights dropped, e.g. `AirTC_2m` -> "air temperature", `WS_ms_Avg` -> "wind speed", `Rain_mm_Tot` → "rainfall".
 
-Names are compared without case, spaces or punctuation, so `Water Temperature` matches `water_temperature`. If several parameters match, none is set and a warning names them
+  The score is the average of [rapidfuzz](https://rapidfuzz.github.io/RapidFuzz/)'s `token_sort_ratio`, which penalises extra words, and `token_set_ratio`, which doesn't. So "Air temperature at 2m" still matches Air Temperature, and "wind" matches Wind Speed better than Wind Speed Gust.
+
+The best parameter is always set, even if the match is weak. If several parameters share the best score, the one with the lowest id is set.
 
 ### Missing values (`decoding`)
 
@@ -164,7 +168,6 @@ These don't change the suggestion, but point at something to fix in the file or 
 - non-numeric values
 - a dimension without a coordinate variable
 - a dimension that is neither time nor depth (e.g. `wavelength`); only time and depth are supported
-- several parameters matching one variable
 - no latitude and longitude anywhere in the file
 
 ## Best practices for NetCDF files

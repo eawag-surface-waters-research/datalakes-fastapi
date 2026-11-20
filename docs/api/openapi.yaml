@@ -3947,7 +3947,7 @@ components:
           description: |
             Suggested variables, time and coordinates first.
 
-            `parameter_id` is a guess from the `parameters` vocabulary. The first of these that matches decides. If several parameters match, `parameter_id` is `null` and a warning names them.
+            `parameter_id` is a guess from the `parameters` vocabulary: the variable's `standard_name`, `long_name` and name in the file are compared fuzzily with the parameters' names, after spelling out common abbreviations (e.g. `AirTC` is read as air temperature). The best match is always picked, even a weak one, so check every suggestion. If several parameters match equally well, the one with the lowest id is picked. It is `null` only for flags and if the vocabulary is empty.
           items:
             $ref: "#/components/schemas/InspectedVariable"
         scalars:
