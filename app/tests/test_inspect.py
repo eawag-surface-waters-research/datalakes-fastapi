@@ -5,8 +5,8 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from app.enums import DatasetKind, JobStatus, JobType, SourceBackend
-from app.models import Dataset, File, Job, Parameter, Source
+from app.enums import DatasetKind, DatasetStatus, JobStatus, JobType, SourceBackend, VariableRole
+from app.models import Dataset, File, Job, Parameter, Source, Variable
 
 T0 = datetime(2024, 9, 1, tzinfo=UTC)
 FILE = "2024/L2_ThermistorChain_202406.nc"
@@ -96,6 +96,29 @@ async def test_inspect_file(client, session, filesystem):
   assert temp["shape"] == [3, 2]
   assert temp["sample"] == {"count": 6, "missing": 1, "min": 9.0, "max": 11.0}
   assert body["warnings"] == ["temp: placeholder values found in the sample, suggested decoding {'missing_values': [-9999]}."]
+
+
+async def test_inspect_learns_from_published_datasets(client, session, filesystem):
+  """By its long_name, temp is Water temperature, but five published datasets chose Surface temperature for it."""
+  session.add_all(
+    [
+      Parameter(id=1, name="Time", cf_name="time"),
+      Parameter(id=5, name="Water temperature", cf_name="water_temperature"),
+      Parameter(id=68, name="Surface temperature", cf_name="surface_water_temperature"),
+    ]
+  )
+  await session.commit()
+  for _ in range(5):
+    other = await add_dataset(session, with_source=False, status=DatasetStatus.published)
+    session.add(Variable(dataset_id=other.id, name="time", source_name="time", role=VariableRole.time, dimensions=["time"]))
+    session.add(Variable(dataset_id=other.id, name="temp", source_name="temp", role=VariableRole.data, dimensions=["time"], parameter_id=68))
+    await session.commit()
+  dataset = await add_dataset(session)
+  await add_file(session, filesystem, dataset.id, FILE)
+
+  response = await client.post(f"/datasets/{dataset.id}/inspect", json={"file": FILE})
+  assert response.status_code == 200
+  assert {v["name"]: v["parameter_id"] for v in response.json()["variables"]}["temp"] == 68
 
 
 @pytest.mark.parametrize("body", [None, {}, {"file": None}])

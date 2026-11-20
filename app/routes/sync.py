@@ -298,5 +298,6 @@ async def inspect_file(dataset_id: int, session: SessionDep, request: InspectReq
     raise ApiError(504, "inspect_timeout", f"Reading {file!r} took longer than {INSPECT_TIMEOUT:g} s") from None
 
   parameters = (await session.exec(select(Parameter))).all()
-  matching.guess_parameters(result, parameters)
+  history = await matching.parameter_history(session, dataset_id, [v.source_name for v in result.variables])
+  matching.guess_parameters(result, parameters, history)
   return result

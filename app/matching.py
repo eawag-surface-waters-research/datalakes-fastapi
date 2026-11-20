@@ -4,6 +4,7 @@ Guesses each inspected variable's parameter from the `parameters` vocabulary, fo
 The variable's standard_name, long_name and name in the file are compared with each parameter's name, cf_name and translations.
 Abbreviations common in logger files are spelled out first, e.g. `AirTC` -> "air temperature" and `WS_ms_Avg` -> "wind speed".
 The names are then compared fuzzily, so "Air temperature at 2m" still matches "Air Temperature".
+Parameters that published datasets gave a variable of the same name get a bonus, so the guesses learn from what users chose before.
 See `docs/netcdf_inspection.md` for the rules.
 """
 
@@ -13,12 +14,18 @@ from dataclasses import dataclass
 from typing import Any
 
 from rapidfuzz import fuzz
+from sqlmodel import col, func, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.enums import VariableRole
-from app.models import Parameter
+from app.enums import DatasetStatus, VariableRole
+from app.models import Dataset, Parameter, Variable
 from app.schemas.inspect import InspectedVariable, InspectResult
 
 FUZZY_WEIGHT = 0.95  # a fuzzy match, even an exact one, ranks below a standard_name that is the parameter's cf_name
+HISTORY_WEIGHT = 50  # points a parameter gains if every published dataset with a variable of this name gave it this parameter
+FULL_CONFIDENCE = 5  # number of datasets from which a name's history counts fully. One dataset counts a fifth.
+
+type History = dict[str, dict[int, int]]  # lowercased source_name -> parameter id -> number of published datasets that chose it
 
 # lowercase words in variable names -> what they stand for
 ABBREVIATIONS = {
@@ -100,7 +107,7 @@ HEIGHT_PATTERN = re.compile(r"\d+(\.\d+)?[a-z]{0,2}")  # numbers and heights suc
 
 @dataclass(frozen=True)
 class Candidate:
-  """A parameter a variable may measure, with how well it matches (0 to 100)."""
+  """A parameter a variable may measure, with how well it matches: up to 100 for the names, plus up to `HISTORY_WEIGHT` from the history."""
 
   parameter: Parameter
   score: float
@@ -115,45 +122,82 @@ class _Key:
   words: str  # lowercased, words separated by single spaces
 
 
-def guess_parameters(result: InspectResult, parameters: Iterable[Parameter]) -> None:
+def guess_parameters(result: InspectResult, parameters: Iterable[Parameter], history: History | None = None) -> None:
   """
   Sets each variable's `parameter_id` to the best matching parameter.
   Flags aren't guessed.
   If several parameters match equally well, the one with the lowest id is set.
+  `history` comes from `parameter_history`. Without it, only the names are compared.
   """
   keys = _keys(parameters)
   for variable in result.variables:
     if variable.role == VariableRole.flag:
       continue
-    if ranked := rank_parameters(variable, keys):
+    if ranked := rank_parameters(variable, keys, history or {}):
       variable.parameter_id = ranked[0].parameter.id
 
 
-def rank_parameters(variable: InspectedVariable, keys: list[_Key]) -> list[Candidate]:
+async def parameter_history(session: AsyncSession, dataset_id: int, source_names: Iterable[str]) -> History:
   """
-  Every parameter with its best score for this variable, best first, and by id among equal scores, so ties always go the same way.
-  Parameters that share no letters with it score 0 and are left out.
+  For each of the source_names, ignoring case: the parameters that published datasets other than `dataset_id` gave a variable of that name,
+  and in how many datasets. Drafts don't count.
+  """
+  name = func.lower(Variable.source_name)
+  query = (
+    select(name, Variable.parameter_id, func.count(col(Variable.dataset_id).distinct()))
+    .join(Dataset, col(Dataset.id) == col(Variable.dataset_id))
+    .where(
+      Dataset.status == DatasetStatus.published,
+      Variable.dataset_id != dataset_id,
+      col(Variable.parameter_id).is_not(None),
+      name.in_({source_name.lower() for source_name in source_names}),
+    )
+    .group_by(name, col(Variable.parameter_id))
+  )
+
+  history: History = {}
+  for source_name, parameter_id, datasets in (await session.exec(query)).all():
+    assert parameter_id is not None  # to satisfy mypy, because the query already filters out None
+    history.setdefault(source_name, {})[parameter_id] = datasets
+  return history
+
+
+def rank_parameters(variable: InspectedVariable, keys: list[_Key], history: History | None = None) -> list[Candidate]:
+  """
+  Every parameter with its score for this variable, best first, and by id among equal scores, so ties always go the same way.
+  The score is the best match of the names plus the bonus from the history. Parameters that score 0 are left out.
   """
   standard_name = _text(variable.attributes.get("standard_name"))
   texts = [text for text in (standard_name, _text(variable.attributes.get("long_name")), variable.source_name) if text]
 
-  best: dict[int | None, Candidate] = {}  # parameter id -> its best candidate
-
-  def offer(candidate: Candidate) -> None:
-    current = best.get(candidate.parameter.id)
-    if current is None or candidate.score > current.score:
-      best[candidate.parameter.id] = candidate
-
+  parameters: dict[int | None, Parameter] = {}
+  scores: dict[int | None, float] = {}  # parameter id -> its best score for the names
   for key in keys:
+    parameters[key.parameter.id] = key.parameter
     if standard_name and key.text == key.parameter.cf_name and _words(standard_name) == key.words:
-      offer(Candidate(key.parameter, 100.0))
-      continue
-    for text in texts:
-      for query in _queries(text):
-        if score := _similarity(query, key.words) * FUZZY_WEIGHT:
-          offer(Candidate(key.parameter, round(score, 1)))
+      score = 100.0
+    else:
+      score = max((_similarity(query, key.words) * FUZZY_WEIGHT for text in texts for query in _queries(text)), default=0.0)
+    scores[key.parameter.id] = max(scores.get(key.parameter.id, 0.0), score)
 
-  return sorted(best.values(), key=lambda c: (-c.score, c.parameter.id or 0))
+  for parameter_id, bonus in _history_bonus(variable.source_name, history or {}).items():
+    if parameter_id in scores:  # only parameters still in the vocabulary
+      scores[parameter_id] += bonus
+
+  candidates = [Candidate(parameters[parameter_id], round(score, 1)) for parameter_id, score in scores.items() if score > 0]
+  return sorted(candidates, key=lambda c: (-c.score, c.parameter.id or 0))
+
+
+def _history_bonus(source_name: str, history: History) -> dict[int, float]:
+  """
+  Bonus points per parameter: `HISTORY_WEIGHT` times the share of datasets that chose it for this name,
+  times how much the history can be trusted (fully from `FULL_CONFIDENCE` datasets on).
+  E.g. a name given Solar Irradiance in 12 of 13 datasets: 50 * 12/13 = +46. A name used in one dataset: 50 * 1/5 = +10.
+  """
+  chosen = history.get(source_name.lower(), {})
+  datasets = sum(chosen.values())
+  confidence = min(datasets, FULL_CONFIDENCE) / FULL_CONFIDENCE
+  return {parameter_id: HISTORY_WEIGHT * count / datasets * confidence for parameter_id, count in chosen.items()}
 
 
 def _keys(parameters: Iterable[Parameter]) -> list[_Key]:

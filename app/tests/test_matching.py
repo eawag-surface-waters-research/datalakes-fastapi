@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from app.enums import VariableRole
-from app.matching import guess_parameters
-from app.models import Parameter
+from app.enums import DatasetKind, DatasetStatus, VariableRole
+from app.matching import History, guess_parameters, parameter_history
+from app.models import Dataset, Parameter, Variable
 from app.schemas.inspect import InspectedVariable, InspectResult, SampleSummary
 
 SEED_PARAMETERS = [Parameter(**row) for row in json.loads((Path(__file__).parents[2] / "scripts" / "seed_data" / "parameters.json").read_text())]
@@ -31,7 +31,7 @@ def variable(source_name: str, role=VariableRole.data, **attributes) -> Inspecte
   )
 
 
-def guessed(*variables: InspectedVariable, parameters=PARAMETERS) -> tuple[dict[str, int | None], list[str]]:
+def guessed(*variables: InspectedVariable, parameters=PARAMETERS, history: History | None = None) -> tuple[dict[str, int | None], list[str]]:
   """The guessed parameter IDs by source_name, and the warnings."""
   result = InspectResult(
     file="data.nc",
@@ -46,7 +46,7 @@ def guessed(*variables: InspectedVariable, parameters=PARAMETERS) -> tuple[dict[
     global_attributes={},
     warnings=[],
   )
-  guess_parameters(result, parameters)
+  guess_parameters(result, parameters, history)
   return {v.source_name: v.parameter_id for v in result.variables}, result.warnings
 
 
@@ -125,3 +125,66 @@ def test_flags_are_not_guessed():
 
 def test_no_parameters():
   assert guessed(variable("temp", standard_name="water_temperature"), parameters=[])[0] == {"temp": None}
+
+
+# ---------------------------------------------------------------------------
+# history: what published datasets chose before
+# ---------------------------------------------------------------------------
+
+
+def test_history_decides_a_close_call():
+  # by name, temp is as close to Air Temperature as to Water temperature
+  assert guessed(variable("temp"), parameters=SEED_PARAMETERS)[0]["temp"] == 6
+  assert guessed(variable("temp"), parameters=SEED_PARAMETERS, history={"temp": {5: 1}})[0]["temp"] == 5
+
+
+def test_history_of_one_dataset_doesnt_beat_a_clear_name():
+  assert guessed(variable("WS"), parameters=SEED_PARAMETERS, history={"ws": {35: 1}})[0]["WS"] == 7
+
+
+def test_history_of_many_datasets_beats_the_name():
+  assert guessed(variable("WS"), parameters=SEED_PARAMETERS, history={"ws": {35: 5}})[0]["WS"] == 35
+
+
+def test_history_ignores_case():
+  assert guessed(variable("TEMP"), parameters=SEED_PARAMETERS, history={"temp": {5: 1}})[0]["TEMP"] == 5
+
+
+def test_history_follows_the_majority():
+  assert guessed(variable("Ptemp"), parameters=SEED_PARAMETERS, history={"ptemp": {98: 4, 6: 1}})[0]["Ptemp"] == 98
+
+
+def test_history_of_a_parameter_not_in_the_vocabulary_is_ignored():
+  assert guessed(variable("temp"), parameters=SEED_PARAMETERS, history={"temp": {999: 5}})[0]["temp"] == 6
+
+
+async def add_dataset(session, status: DatasetStatus, *variables: tuple[str, int | None]) -> int:
+  """A dataset with time and data variables given as (source_name, parameter_id). Returns its id."""
+  dataset = Dataset(title="Weather station", kind=DatasetKind.data, status=status)
+  session.add(dataset)
+  await session.commit()
+  await session.refresh(dataset)
+  dataset_id = dataset.id
+  assert dataset_id is not None
+  session.add(Variable(dataset_id=dataset_id, name="time", source_name="time", role=VariableRole.time, dimensions=["time"]))
+  for i, (source_name, parameter_id) in enumerate(variables):
+    session.add(
+      Variable(dataset_id=dataset_id, name=f"v{i}", source_name=source_name, role=VariableRole.data, dimensions=["time"], parameter_id=parameter_id)
+    )
+  await session.commit()
+  return dataset_id
+
+
+async def test_parameter_history_counts_published_datasets_by_name(session):
+  session.add_all(
+    [Parameter(id=5, name="Water temperature"), Parameter(id=11, name="Solar Irradiance"), Parameter(id=68, name="Surface temperature")]
+  )
+  await session.commit()
+  await add_dataset(session, DatasetStatus.published, ("TEMP", 68), ("Slrw", 11))
+  await add_dataset(session, DatasetStatus.published, ("temp", 68))
+  await add_dataset(session, DatasetStatus.published, ("temp", 5), ("other", 5))
+  await add_dataset(session, DatasetStatus.published, ("temp", None))  # no parameter chosen
+  await add_dataset(session, DatasetStatus.draft, ("temp", 5))  # drafts don't count
+  inspected = await add_dataset(session, DatasetStatus.published, ("temp", 5))  # nor does the dataset being inspected
+
+  assert await parameter_history(session, inspected, ["temp", "SLRW", "unknown"]) == {"temp": {68: 2, 5: 1}, "slrw": {11: 1}}

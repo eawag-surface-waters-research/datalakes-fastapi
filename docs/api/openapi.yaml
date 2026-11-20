@@ -3947,7 +3947,7 @@ components:
           description: |
             Suggested variables, time and coordinates first.
 
-            `parameter_id` is a guess from the `parameters` vocabulary: the variable's `standard_name`, `long_name` and name in the file are compared fuzzily with the parameters' names, after spelling out common abbreviations (e.g. `AirTC` is read as air temperature). The best match is always picked, even a weak one, so check every suggestion. If several parameters match equally well, the one with the lowest id is picked. It is `null` only for flags and if the vocabulary is empty.
+            `parameter_id` is a guess from the `parameters` vocabulary: the variable's `standard_name`, `long_name` and name in the file are compared fuzzily with the parameters' names, after spelling out common abbreviations (e.g. `AirTC` is read as air temperature). Parameters that other published datasets gave a variable of the same name get a bonus, which grows with the number of datasets that chose them. The best match is always picked, even a weak one, so check every suggestion. If several parameters match equally well, the one with the lowest id is picked. It is `null` only for flags and if the vocabulary is empty.
           items:
             $ref: "#/components/schemas/InspectedVariable"
         scalars:

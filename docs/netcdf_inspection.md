@@ -6,8 +6,8 @@ Inspection reads one NetCDF file and suggests the dataset's feature type and var
 | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`app/inspection.py`](../app/inspection.py)                                           | The rules below. `inspect_file(path)` reads the file.                                                                                                                                                                                                                                           |
 | [`app/matching.py`](../app/matching.py)                                               | `guess_parameters(result, parameters)` fills in `parameter_id`, see [Parameter](#parameter-parameter_id).                                                                                                                                                                                       |
-| `POST /datasets/{dataset_id}/inspect` ([`app/routes/sync.py`](../app/routes/sync.py)) | Checks that the file is in the dataset's archive (the first file by path if none is given), reads it in a thread with a 10 s limit (504 `inspect_timeout`), and guesses parameters from the `parameters` table. The response is `InspectResult` in [`docs/api/openapi.yaml`](api/openapi.yaml). |
-| [`scripts/inspect_netcdf.py`](../scripts/inspect_netcdf.py)                           | The same for a local file, without a database. Parameters are guessed from `scripts/seed_data/parameters.json`, written by `scripts/seed_dummy_data.py --export-parameters`.                                                                                                                    |
+| `POST /datasets/{dataset_id}/inspect` ([`app/routes/sync.py`](../app/routes/sync.py)) | Checks that the file is in the dataset's archive (the first file by path if none is given), reads it in a thread with a 10 s limit (504 `inspect_timeout`), and guesses parameters from the `parameters` table and the variables of published datasets. The response is `InspectResult` in [`docs/api/openapi.yaml`](api/openapi.yaml). |
+| [`scripts/inspect_netcdf.py`](../scripts/inspect_netcdf.py)                           | The same for a local file, without a database, so without history. Parameters are guessed from `scripts/seed_data/parameters.json`, written by `scripts/seed_dummy_data.py --export-parameters`.                                                                                                                    |
 
 ```console
 uv run python -m scripts.inspect_netcdf path/to/file.nc            # readable report
@@ -122,6 +122,14 @@ Done by [`app/matching.py`](../app/matching.py). The variable's `standard_name`,
   - with camelCase split, abbreviations spelled out and units, statistics and heights dropped, e.g. `AirTC_2m` -> "air temperature", `WS_ms_Avg` -> "wind speed", `Rain_mm_Tot` → "rainfall".
 
   The score is the average of [rapidfuzz](https://rapidfuzz.github.io/RapidFuzz/)'s `token_sort_ratio`, which penalises extra words, and `token_set_ratio`, which doesn't. So "Air temperature at 2m" still matches Air Temperature, and "wind" matches Wind Speed better than Wind Speed Gust.
+
+**History.** The endpoint also looks at what users chose before: the variables of other **published** datasets with the same name in the file (`source_name`, ignoring case). Drafts don't count, as their variables may still be unreviewed suggestions. Each parameter they were given gets a bonus of up to 50 points (`HISTORY_WEIGHT`):
+
+```
+bonus = 50 × (datasets that chose this parameter / datasets with a variable of this name) × min(datasets with a variable of this name, 5) / 5
+```
+
+So a name given Solar Irradiance in 12 of 13 datasets gets +46 for it, enough to beat any name match. A name used in only one dataset gets +10, which decides close calls (e.g. `temp`, as close to Air Temperature as to Water temperature by name) but doesn't overrule a clear one. The history only exists once datasets with variables are published, e.g. after the migration from the old database.
 
 The best parameter is always set, even if the match is weak. If several parameters share the best score, the one with the lowest id is set.
 
