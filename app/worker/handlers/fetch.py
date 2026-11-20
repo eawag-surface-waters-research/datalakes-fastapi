@@ -74,6 +74,16 @@ def compare(listing: list[SourceEntry], indexed: dict[str, File], archive: Path)
   return Changes(new=new, changed=changed, removed=removed, unchanged=unchanged, missing=missing)
 
 
+@dataclass
+class Fetched:
+  """What a fetch changed, for a sync to process."""
+
+  result: FetchResult  # the fetch job's result
+  new: list[str]  # paths of the files that weren't in the index
+  changed: list[File]  # index entries of the changed files (including the missing ones) as they were before the fetch
+  removed: list[File]  # index entries of the removed files as they were before the fetch, e.g. with the time range their data covers
+
+
 def delete_from_archive(archive: Path, paths: list[str]) -> None:
   """Deletes files from the archive."""
   for path in paths:
@@ -94,6 +104,10 @@ class FetchHandler(Handler[NoParams]):
   params_model = NoParams
 
   async def run(self, context: JobContext, params: NoParams) -> FetchResult:
+    return (await self.fetch(context)).result
+
+  async def fetch(self, context: JobContext) -> Fetched:
+    """Does the fetch and returns what it changed"""
     dataset_id = context.dataset_id
     if dataset_id is None:
       raise JobError("A fetch job needs a dataset")
@@ -137,12 +151,19 @@ class FetchHandler(Handler[NoParams]):
     delete_from_archive(archive_path, changes.removed)  # after the index, so the index never lists a file that isn't in the archive
 
     await context.log(f"Done: copied {len(changes.to_upsert)} files ({bytes_copied} bytes), removed {len(changes.removed)}")
-    return FetchResult(
+    result = FetchResult(
       files_new=len(changes.new),
       files_changed=len(changes.changed),
       files_removed=len(changes.removed),
       files_unchanged=changes.unchanged,
       bytes_copied=bytes_copied,
+    )
+
+    return Fetched(
+      result=result,
+      new=[entry.path for entry in changes.new],
+      changed=[indexed[entry.path] for entry in changes.changed],
+      removed=[indexed[path] for path in changes.removed],
     )
 
   async def _load(self, context: JobContext, dataset_id: int) -> tuple[SourceInputBase, dict[str, File]]:

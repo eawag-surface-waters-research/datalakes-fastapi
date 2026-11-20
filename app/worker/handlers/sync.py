@@ -21,7 +21,7 @@ class SyncHandler(Handler[NoParams]):
   params_model = NoParams
 
   def __init__(self) -> None:
-    self.fetch = FetchHandler()
+    self.fetcher = FetchHandler()
 
   async def run(self, context: JobContext, params: NoParams) -> SyncResult:
     if context.dataset_id is None:
@@ -29,10 +29,10 @@ class SyncHandler(Handler[NoParams]):
 
     # 1. Fetch: make the archive match the source. New and changed files are copied and marked `new` in the index, removed files are deleted from the archive and the index
     with context.progress_range(0, FETCH_PROGRESS):
-      fetched = await self.fetch.run(context, params)
+      fetched = await self.fetcher.fetch(context)
     await context.progress(FETCH_PROGRESS)
 
-    # TODO: 2. Load the dataset's variables (the schema of its files) and the files marked `new`. The removed ones come from the fetch.
+    # TODO: 2. Load the dataset's variables (the schema of its files). The new, changed and removed files, with their old time ranges, come from `fetched`.
 
     # TODO: 3. Check each new or changed file against the variables: NetCDF, every `source_name` with the declared dimensions, matching units, CF time units.
     # Collect every problem of a file, then handle:
@@ -48,4 +48,4 @@ class SyncHandler(Handler[NoParams]):
 
     # TODO: 7. Return the fetch's counts with the processing's. If a file failed, fail the job with the grouped problems. Maybe also send mail/alert
     await context.log("Processing isn't implemented yet: the fetched files stay `new`")
-    return SyncResult(**fetched.model_dump())
+    return SyncResult(**fetched.result.model_dump())

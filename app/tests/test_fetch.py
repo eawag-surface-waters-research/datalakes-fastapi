@@ -19,8 +19,8 @@ from app.enums import FileStatus, JobStatus, JobType, SourceBackend
 from app.models import Dataset, File, Job, Source
 from app.storage import is_safe_relative_path
 from app.worker import JobContext, enqueue
-from app.worker.handlers import FetchHandler, NoParams, SyncHandler
-from app.worker.handlers.fetch import FetchResult
+from app.worker.handlers import FetchHandler, SyncHandler
+from app.worker.handlers.fetch import Fetched, FetchResult
 from app.worker.handlers.sync import FETCH_PROGRESS
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -305,6 +305,74 @@ async def test_fetch_without_source_fails(worker_engine, make_worker, filesystem
   assert job.error == f"Dataset {dataset_id} has no source"
 
 
+async def fetch_directly(engine: AsyncEngine, dataset_id: int) -> Fetched:
+  """Runs `FetchHandler.fetch` outside the worker, to see what it returns."""
+  async with AsyncSession(engine, expire_on_commit=False) as session:
+    job = await enqueue(session, JobType.fetch, dataset_id=dataset_id)
+  context = JobContext(engine, job)
+  try:
+    return await FetchHandler().fetch(context)
+  finally:
+    await context.close()
+
+
+async def set_processed(engine: AsyncEngine, dataset_id: int, path: str, time_start: datetime, time_end: datetime) -> None:
+  """Marks an indexed file as processed with a time range, as the processing will."""
+  async with AsyncSession(engine) as session:
+    file = (await session.exec(select(File).where(File.dataset_id == dataset_id, File.path == path))).one()
+    file.status, file.time_start, file.time_end = FileStatus.ok, time_start, time_end
+    session.add(file)
+    await session.commit()
+
+
+async def test_fetch_returns_what_it_changed(worker_engine, make_worker, bucket, filesystem):
+  for path in ["kept.nc", "changed.nc", "removed.nc", "missing.nc"]:
+    bucket.put(path, "x")
+  dataset_id = await add_dataset(worker_engine, bucket)
+  await fetch(worker_engine, make_worker, dataset_id)
+  ranges = {
+    "kept.nc": (datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 1, 31, tzinfo=UTC)),
+    "changed.nc": (datetime(2024, 2, 1, tzinfo=UTC), datetime(2024, 2, 29, tzinfo=UTC)),
+    "removed.nc": (datetime(2024, 3, 1, tzinfo=UTC), datetime(2024, 3, 31, tzinfo=UTC)),
+    "missing.nc": (datetime(2024, 4, 1, tzinfo=UTC), datetime(2024, 4, 30, tzinfo=UTC)),
+  }
+  for path, (start, end) in ranges.items():
+    await set_processed(worker_engine, dataset_id, path, start, end)
+
+  bucket.put("added.nc", "a")
+  bucket.put("changed.nc", "longer")
+  bucket.remove("removed.nc")
+  (filesystem / "raw" / str(dataset_id) / "missing.nc").unlink()
+  fetched = await fetch_directly(worker_engine, dataset_id)
+
+  assert fetched.result == FetchResult.model_validate(result(files_new=1, files_changed=2, files_removed=1, files_unchanged=1, bytes_copied=8))
+  assert fetched.new == ["added.nc"]
+  # the changed and removed entries are as they were before the fetch: old size, status and time range
+  assert sorted((file.path, file.size, file.status, file.time_start, file.time_end) for file in fetched.changed) == [
+    ("changed.nc", 1, FileStatus.ok, *ranges["changed.nc"]),
+    ("missing.nc", 1, FileStatus.ok, *ranges["missing.nc"]),
+  ]
+  assert [(file.path, file.status, file.time_start, file.time_end) for file in fetched.removed] == [
+    ("removed.nc", FileStatus.ok, *ranges["removed.nc"])
+  ]
+
+  # while the index has the new state
+  files = await index(worker_engine, dataset_id)
+  assert set(files) == {"kept.nc", "changed.nc", "missing.nc", "added.nc"}
+  assert files["changed.nc"].size == 6
+  assert files["changed.nc"].status == FileStatus.new
+  assert files["kept.nc"].status == FileStatus.ok
+
+
+async def test_fetch_that_changes_nothing_returns_nothing(worker_engine, make_worker, bucket, filesystem):
+  bucket.put("a.nc", "a")
+  dataset_id = await add_dataset(worker_engine, bucket)
+  await fetch(worker_engine, make_worker, dataset_id)
+  fetched = await fetch_directly(worker_engine, dataset_id)
+  assert (fetched.new, fetched.changed, fetched.removed) == ([], [], [])
+  assert fetched.result == FetchResult.model_validate(result(files_unchanged=1))
+
+
 async def test_sync_fetches_first(worker_engine, make_worker, bucket, filesystem):
   bucket.put("a.nc", "a" * 10)
   bucket.put("b.nc", "b" * 5)
@@ -330,13 +398,13 @@ async def test_fetch_reports_only_its_part_of_a_syncs_progress(worker_engine, ma
     seen.append(job.progress)
 
   class StubFetch(FetchHandler):
-    async def run(self, context: JobContext, params: NoParams) -> FetchResult:
+    async def fetch(self, context: JobContext) -> Fetched:
       await report(context, 0.5)
       await report(context, 1)
-      return FetchResult.model_validate(result())
+      return Fetched(result=FetchResult.model_validate(result()), new=[], changed=[], removed=[])
 
   handler = SyncHandler()
-  handler.fetch = StubFetch()
+  handler.fetcher = StubFetch()
   dataset_id = await add_dataset(worker_engine, None)
   async with AsyncSession(worker_engine, expire_on_commit=False) as session:
     job = await enqueue(session, JobType.sync, dataset_id=dataset_id)
