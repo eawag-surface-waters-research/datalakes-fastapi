@@ -19,6 +19,7 @@ from app.worker.handlers.base import Handler, NoParams
 
 DEFAULT_MODIFICATION_TIME = datetime(1970, 1, 1, tzinfo=UTC)  # the modification time of a file whose source doesn't report one
 PROGRESS_INTERVAL = 1.0  # min. seconds between progress updates while copying
+INDEX_BATCH_SIZE = 5000  # files per statement when updating the index. Postgres allows 32767 parameters, and an upsert takes 5 per file
 
 
 class FetchResult(BaseModel):
@@ -225,8 +226,9 @@ class FetchHandler(Handler[NoParams]):
         for entry in changes.to_upsert
       ]
 
-      if upsert_rows:
-        upsert_statement = insert(File).values(upsert_rows)
+      # in batches, so a statement never has more parameters than Postgres allows
+      for start in range(0, len(upsert_rows), INDEX_BATCH_SIZE):
+        upsert_statement = insert(File).values(upsert_rows[start : start + INDEX_BATCH_SIZE])
         excluded = upsert_statement.excluded
         await session.exec(  # insert the new files, and update the changed ones with their new size and modification time, marking them `new` again
           upsert_statement.on_conflict_do_update(
@@ -235,9 +237,10 @@ class FetchHandler(Handler[NoParams]):
           )
         )
 
-      if changes.removed:
+      for start in range(0, len(changes.removed), INDEX_BATCH_SIZE):
         # delete the files that are no longer in the source
-        await session.exec(delete(File).where(col(File.dataset_id) == dataset_id, col(File.path).in_(changes.removed)))
+        removed = changes.removed[start : start + INDEX_BATCH_SIZE]
+        await session.exec(delete(File).where(col(File.dataset_id) == dataset_id, col(File.path).in_(removed)))
 
       # record that the source was read
       await session.exec(update(Source).where(col(Source.dataset_id) == dataset_id).values(last_tested_at=datetime.now(UTC)))
