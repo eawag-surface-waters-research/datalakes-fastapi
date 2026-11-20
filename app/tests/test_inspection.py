@@ -75,11 +75,11 @@ def test_suggested_variable(tmp_path):
     "role": VariableRole.data,
     "dimensions": ["time"],
     "unit": "degC",
-    "parameter_id": None,
     "detail": None,
     "flag_for": None,
     "description": "water temperature",
     "decoding": {"missing_values": [-9999]},
+    "parameter_candidates": [],  # filled in by guess_parameters
     "shape": [4],
     # xarray writes a NaN fill value, which isn't valid JSON
     "attributes": {"_FillValue": None, "units": "degC", "long_name": "water temperature", "ancillary_variables": "qa"},

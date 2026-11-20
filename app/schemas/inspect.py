@@ -4,7 +4,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from app.enums import FeatureType
-from app.schemas.variables import VariableBase
+from app.schemas.variables import VariableCommon
 
 
 class InspectRequest(BaseModel):
@@ -28,8 +28,27 @@ class SampleSummary(BaseModel):
   max: float | None = Field(description="Largest valid value, or `null` if there is none or the values aren't numeric.")
 
 
-class InspectedVariable(VariableBase):
-  """A suggested variable, with what was found in the file."""
+class ParameterCandidate(BaseModel):
+  """A parameter the variable may measure."""
+
+  parameter_id: int
+  score: float = Field(
+    description="How well it matches: up to 100 for the names, plus up to 50 if other published datasets chose it for a variable of the same name.",
+    examples=[95.0],
+  )
+
+
+class InspectedVariable(VariableCommon):
+  """
+  A suggested variable, with what was found in the file.
+  To create it, send it with `parameter_id` set, e.g. to the first of the `parameter_candidates`.
+  """
+
+  parameter_candidates: list[ParameterCandidate] = Field(
+    default_factory=list,
+    description="Up to 5 parameters the variable may measure, best first. Empty for flags and if the vocabulary is empty. "
+    "Even the first may be a weak match, so check it.",
+  )
 
   shape: list[int] = Field(description="Size of each dimension in the inspected file.")
   attributes: dict[str, Any] = Field(description="The variable's attributes in the file, e.g. `units`, `long_name` and `standard_name`.")
@@ -73,7 +92,7 @@ class InspectResult(BaseModel):
     description="Where the data is from, when the file gives it as scalar variables or global attributes instead of as variables along a dimension."
   )
   variables: list[InspectedVariable] = Field(
-    description="Suggested variables, time and coordinates first. `parameter_id` is a guess from the variable's name and attributes."
+    description="Suggested variables, time and coordinates first. `parameter_candidates` are guesses from the variable's names and the history."
   )
   scalars: list[ScalarVariable] = Field(description="Variables without a dimension. They aren't suggested as variables.")
   global_attributes: dict[str, Any] = Field(description="The file's global attributes.")

@@ -2,12 +2,12 @@
 
 Inspection reads one NetCDF file and suggests the dataset's feature type and variables, with warnings for anything the build would reject or that needs a decision.
 
-| Where                                                                                 | What                                                                                                                                                                                                                                                                                            |
-| ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`app/inspection.py`](../app/inspection.py)                                           | The rules below. `inspect_file(path)` reads the file.                                                                                                                                                                                                                                           |
-| [`app/matching.py`](../app/matching.py)                                               | `guess_parameters(result, parameters)` fills in `parameter_id`, see [Parameter](#parameter-parameter_id).                                                                                                                                                                                       |
+| Where                                                                                 | What                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`app/inspection.py`](../app/inspection.py)                                           | The rules below. `inspect_file(path)` reads the file.                                                                                                                                                                                                                                                                                   |
+| [`app/matching.py`](../app/matching.py)                                               | `guess_parameters(result, parameters, history)` fills in `parameter_candidates`, see [Parameter](#parameter-parameter_candidates).                                                                                                                                                                                                      |
 | `POST /datasets/{dataset_id}/inspect` ([`app/routes/sync.py`](../app/routes/sync.py)) | Checks that the file is in the dataset's archive (the first file by path if none is given), reads it in a thread with a 10 s limit (504 `inspect_timeout`), and guesses parameters from the `parameters` table and the variables of published datasets. The response is `InspectResult` in [`docs/api/openapi.yaml`](api/openapi.yaml). |
-| [`scripts/inspect_netcdf.py`](../scripts/inspect_netcdf.py)                           | The same for a local file, without a database, so without history. Parameters are guessed from `scripts/seed_data/parameters.json`, written by `scripts/seed_dummy_data.py --export-parameters`.                                                                                                                    |
+| [`scripts/inspect_netcdf.py`](../scripts/inspect_netcdf.py)                           | The same for a local file, without a database, so without history. Parameters are guessed from `scripts/seed_data/parameters.json`, written by `scripts/seed_dummy_data.py --export-parameters`.                                                                                                                                        |
 
 ```console
 uv run python -m scripts.inspect_netcdf path/to/file.nc            # readable report
@@ -65,7 +65,7 @@ flowchart TD
   F5 --> F6["_location: latitude and longitude from<br/>scalar variables or global attributes"]
   F6 --> F7["warn if no latitude and longitude"]
   F7 --> OUT["InspectResult: time and coordinates first"]
-  OUT --> G["guess_parameters (endpoint and script):<br/>parameter_id from the vocabulary"]
+  OUT --> G["guess_parameters (endpoint and script):<br/>parameter_candidates from the vocabulary"]
 ```
 
 ## How the file is read
@@ -102,17 +102,17 @@ Every variable gets one of the four roles of the `variables` table. They're chec
 
 Each variable that has at least one dimension becomes a suggestion with the fields of a variable. `source_name` is always the exact name in the file, so the build can find it again. The other fields are filled as follows:
 
-| Field          | Rule                                                                                                                                                                        |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`         | The file's name in lower case, other characters replaced by `_`, prefixed with `v_` if it doesn't start with a letter, made unique with `_2`, `_3`… (`O2-sat` → `o2_sat`)   |
-| `unit`         | The `units` attribute. None for time and for flags whose units hold their meanings.                                                                                         |
-| `description`  | `long_name`                                                                                                                                                                 |
-| `flag_for`     | The data variable a flag belongs to: from the data variable's CF `ancillary_variables`, otherwise by name (`temp_qual` → `temp`). Flags on `time` or `depth` aren't linked. |
-| `decoding`     | See below. Never set for time.                                                                                                                                              |
-| `parameter_id` | Guessed from the `parameters` vocabulary, see below.                                                                                                                        |
-| `detail`       | Not guessed, always `null`. Set it by hand to tell apart variables of the same parameter, e.g. `at 2m` and `at 4m`.                                                         |
+| Field                  | Rule                                                                                                                                                                        |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                 | The file's name in lower case, other characters replaced by `_`, prefixed with `v_` if it doesn't start with a letter, made unique with `_2`, `_3`… (`O2-sat` → `o2_sat`)   |
+| `unit`                 | The `units` attribute. None for time and for flags whose units hold their meanings.                                                                                         |
+| `description`          | `long_name`                                                                                                                                                                 |
+| `flag_for`             | The data variable a flag belongs to: from the data variable's CF `ancillary_variables`, otherwise by name (`temp_qual` → `temp`). Flags on `time` or `depth` aren't linked. |
+| `decoding`             | See below. Never set for time.                                                                                                                                              |
+| `parameter_candidates` | Up to 5 guesses from the `parameters` vocabulary, best first, see below. There is no `parameter_id`: set it from a candidate when creating the variable.                    |
+| `detail`               | Not guessed, always `null`. Set it by hand to tell apart variables of the same parameter, e.g. `at 2m` and `at 4m`.                                                         |
 
-### Parameter (`parameter_id`)
+### Parameter (`parameter_candidates`)
 
 Done by [`app/matching.py`](../app/matching.py). The variable's `standard_name`, `long_name` and name in the file are compared with each parameter's name, `cf_name` and translations (`name_de`, `name_fr`, `name_it`). Each parameter gets a score from 0 to 100 for its best match:
 
@@ -131,7 +131,7 @@ bonus = 50 × (datasets that chose this parameter / datasets with a variable of 
 
 So a name given Solar Irradiance in 12 of 13 datasets gets +46 for it, enough to beat any name match. A name used in only one dataset gets +10, which decides close calls (e.g. `temp`, as close to Air Temperature as to Water temperature by name) but doesn't overrule a clear one. The history only exists once datasets with variables are published, e.g. after the migration from the old database.
 
-The best parameter is always set, even if the match is weak. If several parameters share the best score, the one with the lowest id is set.
+The 5 best parameters are suggested with their scores, best first. Among equal scores, the lower id comes first. Flags get no candidates.
 
 ### Missing values (`decoding`)
 

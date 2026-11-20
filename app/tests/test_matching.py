@@ -31,8 +31,14 @@ def variable(source_name: str, role=VariableRole.data, **attributes) -> Inspecte
   )
 
 
+def candidates(variable: InspectedVariable, history: History | None = None) -> list[tuple[int, float]]:
+  """The candidates of one variable as (parameter_id, score), guessed from the seed vocabulary."""
+  _, _ = guessed(variable, parameters=SEED_PARAMETERS, history=history)
+  return [(c.parameter_id, c.score) for c in variable.parameter_candidates]
+
+
 def guessed(*variables: InspectedVariable, parameters=PARAMETERS, history: History | None = None) -> tuple[dict[str, int | None], list[str]]:
-  """The guessed parameter IDs by source_name, and the warnings."""
+  """The best candidate's parameter id by source_name (None without candidates), and the warnings."""
   result = InspectResult(
     file="data.nc",
     format="netcdf4",
@@ -47,7 +53,16 @@ def guessed(*variables: InspectedVariable, parameters=PARAMETERS, history: Histo
     warnings=[],
   )
   guess_parameters(result, parameters, history)
-  return {v.source_name: v.parameter_id for v in result.variables}, result.warnings
+  return {v.source_name: v.parameter_candidates[0].parameter_id if v.parameter_candidates else None for v in result.variables}, result.warnings
+
+
+def test_candidates_are_the_five_best_parameters_best_first():
+  # Wind Speed, Wind Speed Gust, Wind Stress, Sensor Speed, Wind Direction
+  assert candidates(variable("WS")) == [(7, 95.0), (53, 85.5), (35, 63.3), (156, 53.3), (8, 50.9)]
+
+
+def test_candidates_scores_include_the_history_bonus():
+  assert candidates(variable("WS"), history={"ws": {35: 5}})[:2] == [(35, 113.3), (7, 95.0)]
 
 
 def test_parameters_are_guessed_from_standard_name_long_name_and_name():

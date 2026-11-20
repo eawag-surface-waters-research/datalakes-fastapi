@@ -19,11 +19,12 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.enums import DatasetStatus, VariableRole
 from app.models import Dataset, Parameter, Variable
-from app.schemas.inspect import InspectedVariable, InspectResult
+from app.schemas.inspect import InspectedVariable, InspectResult, ParameterCandidate
 
 FUZZY_WEIGHT = 0.95  # a fuzzy match, even an exact one, ranks below a standard_name that is the parameter's cf_name
 HISTORY_WEIGHT = 50  # points a parameter gains if every published dataset with a variable of this name gave it this parameter
 FULL_CONFIDENCE = 5  # number of datasets from which a name's history counts fully. One dataset counts a fifth.
+CANDIDATES = 5  # number of parameter candidates suggested per variable
 
 type History = dict[str, dict[int, int]]  # lowercased source_name -> parameter id -> number of published datasets that chose it
 
@@ -124,17 +125,19 @@ class _Key:
 
 def guess_parameters(result: InspectResult, parameters: Iterable[Parameter], history: History | None = None) -> None:
   """
-  Sets each variable's `parameter_id` to the best matching parameter.
+  Sets each variable's `parameter_candidates` to the `CANDIDATES` best matching parameters, best first.
   Flags aren't guessed.
-  If several parameters match equally well, the one with the lowest id is set.
+  Among parameters that match equally well, the one with the lowest id comes first.
   `history` comes from `parameter_history`. Without it, only the names are compared.
   """
   keys = _keys(parameters)
   for variable in result.variables:
     if variable.role == VariableRole.flag:
       continue
-    if ranked := rank_parameters(variable, keys, history or {}):
-      variable.parameter_id = ranked[0].parameter.id
+    ranked = rank_parameters(variable, keys, history or {})
+    variable.parameter_candidates = [
+      ParameterCandidate(parameter_id=c.parameter.id, score=c.score) for c in ranked[:CANDIDATES] if c.parameter.id is not None
+    ]
 
 
 async def parameter_history(session: AsyncSession, dataset_id: int, source_names: Iterable[str]) -> History:

@@ -53,7 +53,8 @@ def print_report(result: InspectResult, size: int, seconds: float, parameter_nam
     ["source_name", "name", "role", "dimensions", "unit", "parameter", "flag_for", "decoding", "sample min..max (missing/count)", "description"]
   ]
   for v in result.variables:
-    parameter = f"{parameter_names.get(v.parameter_id, '?')} ({v.parameter_id})" if v.parameter_id else ""
+    best = v.parameter_candidates[0] if v.parameter_candidates else None  # the report shows only the best candidate
+    parameter = f"{parameter_names.get(best.parameter_id, '?')} ({best.parameter_id}, score {best.score:g})" if best else ""
     sample = f"{_short(v.sample.min)}..{_short(v.sample.max)} ({v.sample.missing}/{v.sample.count})"
     decoding = json.dumps(v.decoding) if v.decoding else ""
     row = [v.source_name, v.name, v.role, ",".join(v.dimensions), v.unit or "", parameter, v.flag_for or "", decoding, sample, v.description or ""]
@@ -76,7 +77,7 @@ if __name__ == "__main__":
   parser.add_argument(
     "--parameters",
     default=str(SEED_PARAMETERS),
-    help="JSON file with the parameters vocabulary to guess parameter_id from. An empty string skips the guessing.",
+    help="JSON file with the parameters vocabulary to guess parameter_candidates from. An empty string skips the guessing.",
   )
   args = parser.parse_args()
   if not args.file.is_file():

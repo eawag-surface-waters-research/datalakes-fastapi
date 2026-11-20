@@ -14,17 +14,22 @@ NAME_PATTERN = r"^[a-z][a-z0-9_]*$"
 DETAIL_DESCRIPTION = "Tells apart variables of the same parameter, e.g. `at 2m` and `at 4m` for two air temperatures."
 
 
-class VariableBase(SQLModel):
+class VariableCommon(SQLModel):
+  """The fields of a variable that inspect also suggests: all but `parameter_id`, for which inspect suggests several candidates."""
+
   name: str = Field(schema_extra={"pattern": NAME_PATTERN})
   source_name: str
   role: VariableRole = Field(sa_type=enum_type(VariableRole, "variable_role"))
   dimensions: list[str] = Field(min_length=1, sa_type=ARRAY(sa.String))
   unit: str | None = None
-  parameter_id: int | None = Field(default=None, foreign_key="parameters.id", index=True)
   detail: str | None = Field(default=None, description=DETAIL_DESCRIPTION, schema_extra={"examples": ["at 2m"]})
   flag_for: str | None = None
   description: str | None = None
   decoding: dict[str, Any] | None = Field(default=None, sa_type=JSONB)
+
+
+class VariableBase(VariableCommon):
+  parameter_id: int | None = Field(default=None, foreign_key="parameters.id", index=True)
 
 
 LEGACY_AXIS_PATTERN = r"^[Mxyz][0-9]*$"

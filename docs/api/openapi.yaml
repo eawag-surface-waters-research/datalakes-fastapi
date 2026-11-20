@@ -3851,13 +3851,33 @@ components:
           description: Largest valid value, or `null` if there is none or the values aren't numeric.
           examples: [24.37]
 
+    ParameterCandidate:
+      type: object
+      description: A parameter the variable may measure.
+      required: [parameter_id, score]
+      properties:
+        parameter_id:
+          type: integer
+          examples: [5]
+        score:
+          type: number
+          description: How well it matches, up to 100 for the names, plus up to 50 if other published datasets chose it for a variable of the same name.
+          examples: [95.0]
+
     InspectedVariable:
-      description: A suggested variable, ready to send to `POST /datasets/{dataset_id}/variables`, with what was found in the file.
+      description: |
+        A suggested variable, with what was found in the file.
+        To create it with `POST /datasets/{dataset_id}/variables`, send it with `parameter_id` set, e.g. to the first of the `parameter_candidates`.
       allOf:
-        - $ref: "#/components/schemas/VariableCreate"
+        - $ref: "#/components/schemas/VariableCommon"
         - type: object
-          required: [shape, attributes, sample]
+          required: [name, source_name, role, dimensions, parameter_candidates, shape, attributes, sample]
           properties:
+            parameter_candidates:
+              type: array
+              description: Up to 5 parameters the variable may measure, best first. Empty for flags and if the vocabulary is empty. Even the first may be a weak match, so check it.
+              items:
+                $ref: "#/components/schemas/ParameterCandidate"
             shape:
               type: array
               description: Size of each dimension in the inspected file.
@@ -3947,7 +3967,7 @@ components:
           description: |
             Suggested variables, time and coordinates first.
 
-            `parameter_id` is a guess from the `parameters` vocabulary: the variable's `standard_name`, `long_name` and name in the file are compared fuzzily with the parameters' names, after spelling out common abbreviations (e.g. `AirTC` is read as air temperature). Parameters that other published datasets gave a variable of the same name get a bonus, which grows with the number of datasets that chose them. The best match is always picked, even a weak one, so check every suggestion. If several parameters match equally well, the one with the lowest id is picked. It is `null` only for flags and if the vocabulary is empty.
+            `parameter_candidates` are guesses from the `parameters` vocabulary: the variable's `standard_name`, `long_name` and name in the file are compared fuzzily with the parameters' names, after spelling out common abbreviations (e.g. `AirTC` is read as air temperature). Parameters that other published datasets gave a variable of the same name get a bonus, which grows with the number of datasets that chose them. The best match is always picked, even a weak one, so check every suggestion. If several parameters match equally well, the one with the lowest id is picked. It is `null` only for flags and if the vocabulary is empty.
           items:
             $ref: "#/components/schemas/InspectedVariable"
         scalars:
@@ -4397,9 +4417,9 @@ components:
           description: Values above this are treated as missing.
           examples: [1.0e+31]
 
-    VariableBase:
+    VariableCommon:
       type: object
-      description: The fields of a variable that can be set.
+      description: The fields of a variable that inspect also suggests, all but `parameter_id`.
       properties:
         name:
           type: string
@@ -4423,10 +4443,6 @@ components:
           type: [string, "null"]
           description: Unit of the values, e.g. `degC`, `m` or `mg/L`.
           examples: [degC]
-        parameter_id:
-          type: [integer, "null"]
-          description: What the variable measures, from the `parameters` vocabulary.
-          examples: [5]
         detail:
           type: [string, "null"]
           description: Tells apart variables of the same parameter, e.g. `at 2m` and `at 4m` for two air temperatures.
@@ -4440,6 +4456,17 @@ components:
           anyOf:
             - $ref: "#/components/schemas/Decoding"
             - type: "null"
+
+    VariableBase:
+      description: The fields of a variable that can be set.
+      allOf:
+        - $ref: "#/components/schemas/VariableCommon"
+        - type: object
+          properties:
+            parameter_id:
+              type: [integer, "null"]
+              description: What the variable measures, from the `parameters` vocabulary.
+              examples: [5]
 
     LegacyAxis:
       type: [string, "null"]
@@ -6227,7 +6254,12 @@ components:
             role: time
             dimensions: [time]
             unit: null
-            parameter_id: 1
+            parameter_candidates:
+              - { parameter_id: 1, score: 95.0 }
+              - { parameter_id: 2, score: 63.3 }
+              - { parameter_id: 146, score: 51.8 }
+              - { parameter_id: 4, score: 47.5 }
+              - { parameter_id: 109, score: 43.8 }
             detail: null
             flag_for: null
             description: time
@@ -6242,7 +6274,12 @@ components:
             role: coordinate
             dimensions: [depth]
             unit: m
-            parameter_id: 2
+            parameter_candidates:
+              - { parameter_id: 2, score: 95.0 }
+              - { parameter_id: 170, score: 77.2 }
+              - { parameter_id: 43, score: 75.4 }
+              - { parameter_id: 94, score: 75.4 }
+              - { parameter_id: 97, score: 73.9 }
             detail: null
             flag_for: null
             description: depth
@@ -6257,7 +6294,12 @@ components:
             role: data
             dimensions: [time, depth]
             unit: degC
-            parameter_id: 5
+            parameter_candidates:
+              - { parameter_id: 5, score: 95.0 }
+              - { parameter_id: 6, score: 87.7 }
+              - { parameter_id: 99, score: 87.7 }
+              - { parameter_id: 98, score: 86.2 }
+              - { parameter_id: 193, score: 86.2 }
             detail: null
             flag_for: null
             description: Water temperature
@@ -6273,7 +6315,7 @@ components:
             role: flag
             dimensions: [time, depth]
             unit: null
-            parameter_id: null
+            parameter_candidates: []
             detail: null
             flag_for: temp
             description: Quality flag for temp
