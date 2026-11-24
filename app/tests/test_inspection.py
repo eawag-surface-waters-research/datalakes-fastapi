@@ -126,7 +126,6 @@ def test_flag_on_time_is_not_linked(tmp_path):
   assert flag.flag_for is None
   assert flag.unit is None
   assert flag.attributes["units"] == "0 = nothing to report, 1 = more investigation"
-  assert "time_qual: looks like a flag for 'time', a time variable. Only data variables can be flagged." in result.warnings
   assert any(w.startswith("time_qual: `units` holds the flag meanings") for w in result.warnings)
 
 

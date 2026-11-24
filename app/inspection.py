@@ -118,7 +118,7 @@ def inspect_file(path: Path, sample_size: int = SAMPLE_SIZE) -> InspectResult:
         )
       )
 
-    _link_flags(ds, variables, warnings)
+    _link_flags(ds, variables)
     _check_unit_spelling(variables, warnings)
 
     for dim in ds.dims:
@@ -333,9 +333,8 @@ def _suggest_name(source_name: str, taken: set[str]) -> str:
   return unique
 
 
-def _link_flags(ds: xr.Dataset, variables: list[InspectedVariable], warnings: list[str]) -> None:
+def _link_flags(ds: xr.Dataset, variables: list[InspectedVariable]) -> None:
   """Sets `flag_for` from the CF `ancillary_variables` attribute, or from names like temp_qual. Only data variables can be flagged."""
-  roles = {v.source_name: v.role for v in variables}
   names = {v.source_name: v.name for v in variables if v.role == VariableRole.data}
   flags = {v.source_name: v for v in variables if v.role == VariableRole.flag}
   for v in variables:
@@ -350,8 +349,6 @@ def _link_flags(ds: xr.Dataset, variables: list[InspectedVariable], warnings: li
     base = FLAG_SUFFIX_PATTERN.sub("", flag.source_name)
     if base != flag.source_name and base in names:
       flag.flag_for = names[base]
-    elif base in roles:
-      warnings.append(f"{flag.source_name}: looks like a flag for '{base}', a {roles[base]} variable. Only data variables can be flagged.")
 
 
 def _feature_type(ds: xr.Dataset, variables: list[InspectedVariable], axes: dict[str, str], warnings: list[str]) -> tuple[FeatureType | None, str]:
