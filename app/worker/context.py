@@ -8,6 +8,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -19,7 +20,14 @@ logger = logging.getLogger(__name__)
 
 
 class JobError(Exception):
-  """A job failed for a reason its user can act on. The message becomes the job's `error`, so write it for them."""
+  """
+  A job failed for a reason its user can act on. The message becomes the job's `error`, so write it for them.
+  `result` becomes the job's `result` in order to return information about the failure,.
+  """
+
+  def __init__(self, message: str, result: BaseModel | None = None):
+    super().__init__(message)
+    self.result = result
 
 
 class JobContext:

@@ -115,13 +115,15 @@ class Worker:
         )
       elif (exception := work_task.exception()) is not None:
         # the job's handler raised an exception. Mark the job failed, with the error message
+        result = None
         if isinstance(exception, JobError):
           error = str(exception)
+          result = None if exception.result is None else exception.result.model_dump(mode="json")
           logger.info("Job %s: failed: %s", job_id, error)
         else:
           error = f"Unexpected error: {type(exception).__name__}: {exception}"
           logger.error("Job %s: unexpected error", job_id, exc_info=exception)
-        await update_job(conn, job_id, log=f"Failed: {error}", status=JobStatus.failed, error=error, finished_at=sa.func.now())
+        await update_job(conn, job_id, log=f"Failed: {error}", status=JobStatus.failed, error=error, result=result, finished_at=sa.func.now())
       else:
         logger.info("Job %s: succeeded", job_id)
         await update_job(conn, job_id, status=JobStatus.succeeded, progress=1.0, result=work_task.result(), finished_at=sa.func.now())

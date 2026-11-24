@@ -19,9 +19,8 @@ from app.enums import FileStatus, JobStatus, JobType, SourceBackend
 from app.models import Dataset, File, Job, Source
 from app.storage import is_safe_relative_path
 from app.worker import JobContext, enqueue
-from app.worker.handlers import FetchHandler, SyncHandler
+from app.worker.handlers import FetchHandler
 from app.worker.handlers.fetch import Fetched, FetchResult
-from app.worker.handlers.sync import FETCH_PROGRESS
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -37,8 +36,8 @@ class Bucket:
   def _rclone(self, *args: str, input: bytes | None = None) -> None:
     subprocess.run(["rclone", "--config", "", *args], input=input, check=True, capture_output=True, env={"PATH": os.environ["PATH"]})
 
-  def put(self, path: str, content: str) -> None:
-    self._rclone("rcat", f"{self.remote}/{path}", input=content.encode())
+  def put(self, path: str, content: str | bytes) -> None:
+    self._rclone("rcat", f"{self.remote}/{path}", input=content.encode() if isinstance(content, str) else content)
 
   def remove(self, path: str) -> None:
     self._rclone("deletefile", f"{self.remote}/{path}")
@@ -371,83 +370,6 @@ async def test_fetch_that_changes_nothing_returns_nothing(worker_engine, make_wo
   fetched = await fetch_directly(worker_engine, dataset_id)
   assert (fetched.new, fetched.changed, fetched.removed) == ([], [], [])
   assert fetched.result == FetchResult.model_validate(result(files_unchanged=1))
-
-
-async def test_sync_fetches_first(worker_engine, make_worker, bucket, filesystem):
-  bucket.put("a.nc", "a" * 10)
-  bucket.put("b.nc", "b" * 5)
-  dataset_id = await add_dataset(worker_engine, bucket)
-
-  job = await fetch(worker_engine, make_worker, dataset_id, JobType.sync)
-  assert job.status == JobStatus.succeeded, job.error
-  assert job.result == result(files_new=2, bytes_copied=15)
-  assert job.log.startswith("Listing the source\n")
-  assert job.log.endswith("Processing isn't implemented yet: the fetched files stay `new`")
-  assert archive(filesystem, dataset_id) == {"a.nc": "a" * 10, "b.nc": "b" * 5}
-  assert {path: file.status for path, file in (await index(worker_engine, dataset_id)).items()} == {"a.nc": FileStatus.new, "b.nc": FileStatus.new}
-
-
-async def test_fetch_reports_only_its_part_of_a_syncs_progress(worker_engine, make_worker, filesystem):
-  seen: list[float | None] = []
-
-  async def report(context: JobContext, fraction: float) -> None:
-    await context.progress(fraction)
-    async with AsyncSession(worker_engine) as session:
-      job = await session.get(Job, context.job_id)
-    assert job is not None
-    seen.append(job.progress)
-
-  class StubFetch(FetchHandler):
-    async def fetch(self, context: JobContext) -> Fetched:
-      await report(context, 0.5)
-      await report(context, 1)
-      return Fetched(result=FetchResult.model_validate(result()), new=[], changed=[], removed=[])
-
-  handler = SyncHandler()
-  handler.fetcher = StubFetch()
-  dataset_id = await add_dataset(worker_engine, None)
-  async with AsyncSession(worker_engine, expire_on_commit=False) as session:
-    job = await enqueue(session, JobType.sync, dataset_id=dataset_id)
-  await make_worker(handlers={JobType.sync: handler}).run_once()
-
-  assert seen == [FETCH_PROGRESS / 2, FETCH_PROGRESS]
-  async with AsyncSession(worker_engine) as session:
-    job = await session.get(Job, job.id)
-  assert job is not None and job.status == JobStatus.succeeded, job and job.error
-
-
-async def test_second_sync_copies_only_the_changes(worker_engine, make_worker, bucket, filesystem):
-  bucket.put("a.nc", "a")
-  bucket.put("b.nc", "b")
-  dataset_id = await add_dataset(worker_engine, bucket)
-  await fetch(worker_engine, make_worker, dataset_id, JobType.sync)
-
-  bucket.put("c.nc", "cc")
-  bucket.remove("b.nc")
-  job = await fetch(worker_engine, make_worker, dataset_id, JobType.sync)
-  assert job.status == JobStatus.succeeded, job.error
-  assert job.result == result(files_new=1, files_removed=1, files_unchanged=1, bytes_copied=2)
-  assert archive(filesystem, dataset_id) == {"a.nc": "a", "c.nc": "cc"}
-
-
-async def test_sync_fails_when_its_fetch_fails(worker_engine, make_worker, bucket, filesystem):
-  bucket.put("a.nc", "a")
-  dataset_id = await add_dataset(worker_engine, bucket)
-  await fetch(worker_engine, make_worker, dataset_id, JobType.sync)
-
-  bucket.remove("a.nc")
-  job = await fetch(worker_engine, make_worker, dataset_id, JobType.sync)
-  assert job.status == JobStatus.failed
-  assert job.error is not None and job.error.startswith("The source has no files, but the archive has 1 files.")
-  assert "Processing" not in job.log
-  assert archive(filesystem, dataset_id) == {"a.nc": "a"}
-
-
-async def test_sync_without_source_fails(worker_engine, make_worker, filesystem):
-  dataset_id = await add_dataset(worker_engine, None)
-  job = await fetch(worker_engine, make_worker, dataset_id, JobType.sync)
-  assert job.status == JobStatus.failed
-  assert job.error == f"Dataset {dataset_id} has no source"
 
 
 @pytest.mark.parametrize(

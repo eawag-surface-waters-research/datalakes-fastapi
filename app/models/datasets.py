@@ -18,6 +18,7 @@ class Dataset(DatasetBase, table=True):
   depth_max: float | None = None
   downloads: int = Field(default=0, sa_column_kwargs={"server_default": "0"})
   version: int = Field(default=1, sa_column_kwargs={"server_default": "1"})
+  built_at: datetime | None = Field(default=None, sa_type=TIMESTAMPTZ)
   created_at: datetime | None = created_at_field()
   updated_at: datetime | None = updated_at_field()
   created_by: int | None = Field(default=None, sa_type=sa.BigInteger)  # TODO: fill once authentication as added back

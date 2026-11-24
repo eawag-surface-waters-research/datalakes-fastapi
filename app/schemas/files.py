@@ -34,6 +34,7 @@ class FileRead(SQLModel):
   status: FileStatus = Field(
     description="- `new`: copied from the source (new or changed there), not processed yet.\n"
     "- `ok`: processed into the dataset's data.\n"
-    "- `failed`: couldn't be processed, as explained in `error`. It's tried again when the file changes in the source."
+    "- `failed`: couldn't be processed, as explained in `error`. It's tried again when the file changes in the source.\n"
+    "- `ignored`: not a NetCDF file, so it's left out of the data. Only once the dataset has been built: before that, such a file fails the build."
   )
   error: str | None = Field(description="Why processing failed, or `null`.")

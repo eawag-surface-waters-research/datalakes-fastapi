@@ -40,8 +40,14 @@ class ProblemCode(StrEnum):
 @dataclass(frozen=True)
 class Problem:
   code: ProblemCode
-  message: str  # names the file and the variable, what was expected and found, and what to change
+  file: str  # the file's name
+  detail: str  # what was expected and found, without the file's name, so the same problem in many files can be grouped
   variable: str | None = None  # the name of the dataset's variable it's about, if any
+
+  @property
+  def message(self) -> str:
+    """The problem with the file's name, e.g. for the file index."""
+    return f"{self.file}: {self.detail}"
 
 
 @dataclass
@@ -73,7 +79,8 @@ def check_file(path: Path, variables: Sequence[VariableCommon]) -> FileCheck:
     check.problems.append(
       Problem(
         ProblemCode.unsupported_format,
-        f"{path.name}: not a NetCDF file (.nc)",
+        path.name,
+        "not a NetCDF file (.nc)",
       )
     )
     return check
@@ -81,7 +88,7 @@ def check_file(path: Path, variables: Sequence[VariableCommon]) -> FileCheck:
   try:
     ds = xr.open_dataset(path, decode_times=False, decode_timedelta=False, mask_and_scale=False)
   except Exception as exc:  # noqa: BLE001
-    check.problems.append(Problem(ProblemCode.unreadable_file, f"{path.name}: can't be read as NetCDF: {exc}"))
+    check.problems.append(Problem(ProblemCode.unreadable_file, path.name, f"can't be read as NetCDF: {exc}"))
     return check
 
   with ds:
@@ -92,7 +99,8 @@ def check_file(path: Path, variables: Sequence[VariableCommon]) -> FileCheck:
         check.problems.append(
           Problem(
             ProblemCode.missing_variable,
-            f"{path.name}: no variable '{variable.source_name}'{label}",
+            path.name,
+            f"no variable '{variable.source_name}'{label}",
             variable.name,
           )
         )
@@ -123,8 +131,8 @@ def _check_dimensions(name: str, variable: VariableCommon, var: xr.Variable, che
     check.problems.append(
       Problem(
         ProblemCode.wrong_dimensions,
-        f"{name}: variable '{variable.source_name}'{_label(variable)} has dimensions ({', '.join(found)}), "
-        f"expected ({', '.join(variable.dimensions)})",
+        name,
+        f"variable '{variable.source_name}'{_label(variable)} has dimensions ({', '.join(found)}), expected ({', '.join(variable.dimensions)})",
         variable.name,
       )
     )
@@ -139,7 +147,8 @@ def _check_unit(name: str, variable: VariableCommon, var: xr.Variable, check: Fi
   check.problems.append(
     Problem(
       ProblemCode.unit_mismatch,
-      f"{name}: variable '{variable.source_name}'{_label(variable)} has {what}, expected {variable.unit!r}",
+      name,
+      f"variable '{variable.source_name}'{_label(variable)} has {what}, expected {variable.unit!r}",
       variable.name,
     )
   )
@@ -152,7 +161,8 @@ def _check_time(name: str, variable: VariableCommon, var: xr.Variable, check: Fi
     check.problems.append(
       Problem(
         ProblemCode.invalid_time_units,
-        f"{name}: time variable '{variable.source_name}'{_label(variable)} has units {units!r}, not CF units like {CF_TIME_UNITS_EXAMPLE!r}",
+        name,
+        f"time variable '{variable.source_name}'{_label(variable)} has units {units!r}, not CF units like {CF_TIME_UNITS_EXAMPLE!r}",
         variable.name,
       )
     )
@@ -163,7 +173,8 @@ def _check_time(name: str, variable: VariableCommon, var: xr.Variable, check: Fi
     check.problems.append(
       Problem(
         ProblemCode.invalid_time_units,
-        f"{name}: time variable '{variable.source_name}'{_label(variable)} has {values.dtype} values, expected numbers",
+        name,
+        f"time variable '{variable.source_name}'{_label(variable)} has {values.dtype} values, expected numbers",
         variable.name,
       )
     )
@@ -186,7 +197,8 @@ def _check_time(name: str, variable: VariableCommon, var: xr.Variable, check: Fi
     check.problems.append(
       Problem(
         ProblemCode.invalid_time_units,
-        f"{name}: time variable '{variable.source_name}'{_label(variable)} can't be decoded with units {units!r}: {exc}",
+        name,
+        f"time variable '{variable.source_name}'{_label(variable)} can't be decoded with units {units!r}: {exc}",
         variable.name,
       )
     )

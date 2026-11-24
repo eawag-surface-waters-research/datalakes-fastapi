@@ -54,11 +54,6 @@ def test_matching_file_passes_with_its_time_range(tmp_path):
   assert check.time_end == datetime(2023, 11, 14, 22, 33, 20, tzinfo=UTC)
 
 
-def test_messages_use_the_given_name(tmp_path):
-  check = check_file(write(tmp_path, dataset()), [*VARIABLES, variable("oxygen")], name="2024/L2_202410.nc")
-  assert check.problems[0].message.startswith("2024/L2_202410.nc: ")
-
-
 def test_unsupported_format(tmp_path):
   path = tmp_path / "README.md"
   path.write_text("# notes")

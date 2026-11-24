@@ -66,6 +66,7 @@ class FileStatus(StrEnum):
   new = "new"
   ok = "ok"
   failed = "failed"
+  ignored = "ignored"
 
 
 class ExportFormat(StrEnum):
