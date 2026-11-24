@@ -21,5 +21,7 @@ class Partition(SQLModel, table=True):
   rows: int  # time steps in the store
   time_start: datetime = Field(sa_type=TIMESTAMPTZ)
   time_end: datetime = Field(sa_type=TIMESTAMPTZ)
+  depth_min: float | None = None  # the range of the depth axis, for a `timeSeriesProfile`
+  depth_max: float | None = None
   created_at: datetime | None = created_at_field()
   updated_at: datetime | None = updated_at_field()

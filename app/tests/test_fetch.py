@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.enums import FileStatus, JobStatus, JobType, SourceBackend
+from app.enums import FeatureType, FileStatus, JobStatus, JobType, SourceBackend
 from app.models import Dataset, File, Job, Source
 from app.storage import is_safe_relative_path
 from app.worker import JobContext, enqueue
@@ -62,10 +62,12 @@ def filesystem(tmp_path, monkeypatch) -> Path:
   return tmp_path
 
 
-async def add_dataset(engine: AsyncEngine, bucket: Bucket | None, include: list[str] | None = None) -> int:
+async def add_dataset(
+  engine: AsyncEngine, bucket: Bucket | None, include: list[str] | None = None, feature_type: FeatureType | None = FeatureType.time_series
+) -> int:
   """A dataset whose source is the bucket's folder."""
   async with AsyncSession(engine, expire_on_commit=False) as session:
-    dataset = Dataset(title="Thermistor chain")
+    dataset = Dataset(title="Thermistor chain", feature_type=feature_type)
     session.add(dataset)
     await session.commit()
     assert dataset.id is not None

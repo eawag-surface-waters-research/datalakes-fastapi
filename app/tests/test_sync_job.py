@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.enums import FileStatus, JobStatus, JobType, VariableRole
+from app.enums import FeatureType, FileStatus, JobStatus, JobType, VariableRole
 from app.models import Dataset, Job, Partition, Variable
 from app.tests.test_fetch import Bucket, add_dataset, fetch, index, result
 
@@ -411,3 +411,60 @@ async def test_sync_without_source_fails(worker_engine, make_worker, filesystem)
   job = await sync(worker_engine, make_worker, dataset_id)
   assert job.status == JobStatus.failed
   assert job.error == f"Dataset {dataset_id} has no source"
+
+
+async def test_sync_writes_a_time_series_profile(worker_engine, make_worker, bucket, filesystem, tmp_path):
+  ds = xr.Dataset(
+    {"temp": (("time", "depth"), np.array([[4.0, 5.0, 6.0], [4.5, 5.5, 6.5]]), {"units": "degC"})},
+    coords={
+      "time": ("time", np.array([START, START + 600], dtype="float64"), {"units": UNIX_UNITS}),
+      "depth": ("depth", np.array([0.5, 5.0, 20.0]), {"units": "m"}),
+    },
+  )
+  ds.to_netcdf(tmp_path / "chain.nc")
+  bucket.put("chain.nc", (tmp_path / "chain.nc").read_bytes())
+  dataset_id = await add_dataset(worker_engine, bucket, feature_type=FeatureType.time_series_profile)
+  async with AsyncSession(worker_engine) as session:
+    session.add(Variable(dataset_id=dataset_id, name="time", source_name="time", role=VariableRole.time, dimensions=["time"]))
+    session.add(Variable(dataset_id=dataset_id, name="depth", source_name="depth", role=VariableRole.coordinate, dimensions=["depth"], unit="m"))
+    session.add(
+      Variable(dataset_id=dataset_id, name="temperature", source_name="temp", role=VariableRole.data, dimensions=["time", "depth"], unit="degC")
+    )
+    await session.commit()
+
+  job = await sync(worker_engine, make_worker, dataset_id)
+  assert job.status == JobStatus.succeeded, job.error
+  partition = (await partitions(worker_engine, dataset_id))[2023]
+  assert (partition.rows, partition.depth_min, partition.depth_max) == (2, 0.5, 20.0)
+  assert read_partition(filesystem, dataset_id, partition)["temperature"].values.tolist() == [[4.0, 5.0, 6.0], [4.5, 5.5, 6.5]]
+  dataset = await get_dataset(worker_engine, dataset_id)
+  assert (dataset.depth_min, dataset.depth_max) == (0.5, 20.0)
+
+
+async def test_time_series_has_no_depth_extent(worker_engine, make_worker, bucket, filesystem, tmp_path):
+  bucket.put("a.nc", netcdf(tmp_path))
+  dataset_id = await add_dataset(worker_engine, bucket)
+  await add_variables(worker_engine, dataset_id)
+  assert (await sync(worker_engine, make_worker, dataset_id)).status == JobStatus.succeeded
+  dataset = await get_dataset(worker_engine, dataset_id)
+  assert (dataset.depth_min, dataset.depth_max) == (None, None)
+
+
+async def test_sync_without_feature_type_fails(worker_engine, make_worker, bucket, filesystem, tmp_path):
+  bucket.put("a.nc", netcdf(tmp_path))
+  dataset_id = await add_dataset(worker_engine, bucket, feature_type=None)
+  await add_variables(worker_engine, dataset_id)
+  job = await sync(worker_engine, make_worker, dataset_id)
+  assert job.status == JobStatus.failed
+  assert job.error == f"Dataset {dataset_id} has no feature_type. Set it, e.g. to the one inspect suggests, then sync again"
+  assert set(await index(worker_engine, dataset_id)) == {"a.nc"}  # the fetch ran
+  assert "Checking" not in job.log
+
+
+async def test_sync_of_a_profile_dataset_fails(worker_engine, make_worker, bucket, filesystem, tmp_path):
+  bucket.put("a.nc", netcdf(tmp_path))
+  dataset_id = await add_dataset(worker_engine, bucket, feature_type=FeatureType.profile)
+  await add_variables(worker_engine, dataset_id)
+  job = await sync(worker_engine, make_worker, dataset_id)
+  assert job.status == JobStatus.failed
+  assert job.error == "profile datasets can't be built yet"

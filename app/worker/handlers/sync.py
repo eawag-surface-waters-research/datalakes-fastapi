@@ -1,7 +1,7 @@
 from pydantic import Field
 
 from app.enums import JobType
-from app.partitions import PartitionError
+from app.partitions import SUPPORTED_FEATURE_TYPES, PartitionError
 from app.worker.build import FailedFile, affected_years, check_files, load_variables, switch_partitions, write_partitions
 from app.worker.context import JobContext, JobError
 from app.worker.handlers.base import Handler, NoParams
@@ -24,7 +24,7 @@ class SyncHandler(Handler[NoParams]):
   """
   Updates a dataset from its source: a fetch, then processing of the new, changed and removed files.
   The data is written to Zarr, one store per year, and only the years that the new, changed and removed files touch are written again.
-  Switching to the new stores also recomputes the dataset's time extent and increases its `version`.
+  Switching to the new stores also recomputes the dataset's time and depth extents and increases its `version`.
   If the fetch fails, the sync fails with the fetch's error. If a file fails the checks, the sync fails with every file's problems,
   after the files that passed were written, unless the dataset has never been built.
   """
@@ -46,6 +46,11 @@ class SyncHandler(Handler[NoParams]):
 
     # 2. Load the dataset's variables (the schema of its files). The new, changed and removed files, with their old time ranges, come from `fetched`.
     dataset, variables = await load_variables(context, context.dataset_id)
+    feature_type = dataset.feature_type
+    if feature_type is None:
+      raise JobError(f"Dataset {context.dataset_id} has no feature_type")
+    if feature_type not in SUPPORTED_FEATURE_TYPES:
+      raise JobError(f"{feature_type} datasets can't be built yet")
 
     # 3. Check the files to build against the variables and record the outcome in the file index:
     #  - Not built yet (strict): every archived file is checked, and one failing or unsupported file fails the job before anything is written.
@@ -68,11 +73,11 @@ class SyncHandler(Handler[NoParams]):
     # 5. Write those partitions as new stores, from all archived files in their time range. If one fails, nothing is switched.
     with context.progress_range(CHECK_PROGRESS, 1):
       try:
-        written = await write_partitions(context, context.dataset_id, variables, years)
+        written = await write_partitions(context, context.dataset_id, feature_type, variables, years)
       except PartitionError as error:
         raise JobError(f"Nothing was written: {error}", result=result) from None
 
-    # 6. In one transaction: switch to the new stores, mark the written files `ok`, recompute the time extent and increase the `version`.
+    # 6. In one transaction: switch to the new stores, mark the written files `ok`, recompute the time and depth extents and increase the `version`.
     switched = await switch_partitions(context, context.dataset_id, written, checked.passed)
     result.years_written, result.years_removed, result.version = switched.years_written, switched.years_removed, switched.version
     if switched.years_written or switched.years_removed:

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import col, delete, select, update
 
-from app.enums import FileStatus
+from app.enums import FeatureType, FileStatus
 from app.file_checks import FileCheck, check_file
 from app.models import Dataset, File, Partition, Variable
 from app.partitions import WrittenPartition, partition_bounds, partitions_between, write_partition
@@ -127,7 +127,9 @@ async def affected_years(context: JobContext, dataset_id: int, checked: Checked,
   return sorted(years)
 
 
-async def write_partitions(context: JobContext, dataset_id: int, variables: list[Variable], years: list[int]) -> list[WrittenPartition]:
+async def write_partitions(
+  context: JobContext, dataset_id: int, feature_type: FeatureType, variables: list[Variable], years: list[int]
+) -> list[WrittenPartition]:
   """
   Writes each year to a new store, `{year}/{job_id}/` in the dataset's `zarr_dir`, from every archived file that is `new` or `ok`
   and overlaps the year. If writing fails, the stores this job wrote are deleted and the error is raised.
@@ -155,7 +157,7 @@ async def write_partitions(context: JobContext, dataset_id: int, variables: list
       targets.append(target)
 
       # in a thread, so the event loop stays free while the files are read and the store is written
-      partition = await asyncio.to_thread(write_partition, paths, variables, year, target)
+      partition = await asyncio.to_thread(write_partition, paths, variables, feature_type, year, target)
       written.append(partition)
 
       for warning in partition.warnings:
@@ -176,7 +178,7 @@ async def write_partitions(context: JobContext, dataset_id: int, variables: list
 async def switch_partitions(context: JobContext, dataset_id: int, written: list[WrittenPartition], passed: list[str]) -> Switched:
   """
   In one transaction: points the partitions at the stores this job wrote (removing the ones without data), marks the files that
-  passed the checks `ok`, and, if a partition changed, recomputes the dataset's time extent from its partitions and increases its
+  passed the checks `ok`, and, if a partition changed, recomputes the dataset's time and depth extents from its partitions and increases its
   `version`. `built_at` is set if any data was written.
   """
   years_written, years_removed = [], []
@@ -194,6 +196,8 @@ async def switch_partitions(context: JobContext, dataset_id: int, written: list[
         "rows": partition.rows,
         "time_start": partition.time_start,
         "time_end": partition.time_end,
+        "depth_min": partition.depth_min,
+        "depth_max": partition.depth_max,
       }
       statement = insert(Partition).values(dataset_id=dataset_id, year=partition.year, **values)
       # if the partition already exists, point it at the new store. The `dataset_id` and `year` are the unique constraint.
@@ -207,12 +211,19 @@ async def switch_partitions(context: JobContext, dataset_id: int, written: list[
 
     if years_written or years_removed:
       # the extent is recomputed from every partition, so it shrinks when data is removed, and is `null` when none is left
-      extent = select(sa.func.min(Partition.time_start), sa.func.max(Partition.time_end)).where(Partition.dataset_id == dataset_id)
-      time_start, time_end = (await session.exec(extent)).one()
-      values = {"time_start": time_start, "time_end": time_end, "version": col(Dataset.version) + 1}
+      extent = select(
+        sa.func.min(Partition.time_start), sa.func.max(Partition.time_end), sa.func.min(Partition.depth_min), sa.func.max(Partition.depth_max)
+      ).where(Partition.dataset_id == dataset_id)
+      time_start, time_end, depth_min, depth_max = (await session.exec(extent)).one()
+      values = {
+        "time_start": time_start,
+        "time_end": time_end,
+        "depth_min": depth_min,
+        "depth_max": depth_max,
+        "version": col(Dataset.version) + 1,
+      }
 
       if years_written:
-        # the dataset has data now, so set `built_at` if it was `null` before. It is not changed when the dataset already had data
         values["built_at"] = datetime.now(UTC)
 
       statement = update(Dataset).where(col(Dataset.id) == dataset_id).values(**values).returning(col(Dataset.version))
