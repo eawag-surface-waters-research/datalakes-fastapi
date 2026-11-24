@@ -1,7 +1,8 @@
 from pydantic import Field
 
 from app.enums import JobType
-from app.worker.build import FailedFile, check_files, load_variables
+from app.partitions import PartitionError
+from app.worker.build import FailedFile, affected_years, check_files, load_variables, switch_partitions, write_partitions
 from app.worker.context import JobContext, JobError
 from app.worker.handlers.base import Handler, NoParams
 from app.worker.handlers.fetch import FetchHandler, FetchResult
@@ -19,7 +20,7 @@ class SyncResult(FetchResult):
 class SyncHandler(Handler[NoParams]):
   """
   Updates a dataset from its source: a fetch, then processing of the new, changed and removed files.
-  For now the fetch and the file checks run: the files that pass stay `new` in the index.
+  The data is written to Zarr, one store per year, and only the years that the new, changed and removed files touch are written again.
   If the fetch fails, the sync fails with the fetch's error. If a file fails the checks, the sync fails with every file's problems.
   """
 
@@ -52,17 +53,22 @@ class SyncHandler(Handler[NoParams]):
     if checked.strict and checked.failed:
       raise JobError(checked.error(), result=result)
 
-    # TODO: 4. Find the affected Zarr partitions: the time range of each new file, the old and new range of a changed file, and the old range of a removed file, so its data goes away.
+    # 4. Find the affected Zarr partitions: the time range of each new file, the old and new range of a changed file, and the old range of a removed file
+    years = await affected_years(context, context.dataset_id, checked, [*fetched.changed, *fetched.removed])
 
-    # TODO: 5. Write those partitions as new versions, from all archived files in their time range.
+    # 5. Write those partitions as new stores, from all archived files in their time range. If one fails, nothing is switched.
+    with context.progress_range(CHECK_PROGRESS, 1):
+      try:
+        written = await write_partitions(context, context.dataset_id, variables, years)
+      except PartitionError as error:
+        raise JobError(f"Nothing was written: {error}", result=result) from None
 
-    # TODO: 6. In one transaction: switch to the new partition versions, record each file's time range and status, recompute the
-    # dataset's extents  and increase its `version` if anything changed.
+    # 6. In one transaction: switch to the new stores, mark the written files `ok` and set `built_at`.
+    await switch_partitions(context, context.dataset_id, written, checked.passed)
+
+    # TODO: 6. Recompute the dataset's extents and coverage, and increase its `version` if anything changed.
 
     # TODO: 7. Return the fetch's counts with the processing's. If a file failed, fail the job with the grouped problems. Maybe also send mail/alert
-
-    # await mark_built(context, context.dataset_id)
     if checked.failed:
       raise JobError(checked.error(), result=result)
-    await context.log("Writing the data isn't implemented yet: the files that passed the checks stay `new`")
     return result

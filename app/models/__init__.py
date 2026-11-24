@@ -6,6 +6,7 @@ from app.models.files import File
 from app.models.issues import Issue
 from app.models.jobs import Job, RegenerateRun
 from app.models.maintenance import CatalogueVersion, SyncToken
+from app.models.partitions import Partition
 from app.models.sites import Site
 from app.models.sources import Source
 from app.models.variables import Variable
@@ -24,6 +25,7 @@ __all__ = [
   "License",
   "Organisation",
   "Parameter",
+  "Partition",
   "Person",
   "RegenerateRun",
   "Site",

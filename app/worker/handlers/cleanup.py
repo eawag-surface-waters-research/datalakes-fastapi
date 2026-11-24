@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.enums import JobType
 from app.models import Dataset
-from app.storage import raw_dir
+from app.storage import raw_dir, zarr_dir
 from app.worker.context import JobContext, JobError
 from app.worker.handlers.base import Handler
 
@@ -17,7 +17,7 @@ class CleanupParams(BaseModel):
 
 
 class CleanupResult(BaseModel):
-  files_deleted: int = Field(description="Number of files deleted from the dataset's archive")
+  files_deleted: int = Field(description="Number of files deleted from the dataset's archive and Zarr stores")
 
 
 def delete_folder(folder: Path) -> int:
@@ -32,7 +32,7 @@ def delete_folder(folder: Path) -> int:
 
 class CleanupHandler(Handler[CleanupParams]):
   """
-  Deletes the local files of a deleted dataset: its archive in `raw/{dataset_id}/`.
+  Deletes the local files of a deleted dataset: its archive in `raw/{dataset_id}/` and its Zarr stores in `zarr/{dataset_id}/`.
   """
 
   type = JobType.cleanup
@@ -44,10 +44,10 @@ class CleanupHandler(Handler[CleanupParams]):
         # a new dataset was created with the same ID before this job ran: its files must not be deleted
         raise JobError(f"Dataset {params.dataset_id} exists, so its files weren't deleted")
 
-    folder = raw_dir(params.dataset_id)
-
-    await context.log(f"Deleting {folder}")
-    files = delete_folder(folder)
+    files = 0
+    for folder in [raw_dir(params.dataset_id), zarr_dir(params.dataset_id)]:
+      await context.log(f"Deleting {folder}")
+      files += delete_folder(folder)
     await context.log(f"Deleted {files} files")
 
     return CleanupResult(files_deleted=files)

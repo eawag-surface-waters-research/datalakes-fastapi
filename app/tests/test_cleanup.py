@@ -45,6 +45,15 @@ def write_archive(filesystem: Path, dataset_id: int) -> Path:
   return archive
 
 
+def write_zarr(filesystem: Path, dataset_id: int) -> Path:
+  """Stand-ins for two Zarr stores of a year."""
+  root = filesystem / "zarr" / str(dataset_id)
+  for job_id in [1, 2]:
+    (root / "2024" / str(job_id)).mkdir(parents=True)
+    (root / "2024" / str(job_id) / "zarr.json").write_text("{}")
+  return root
+
+
 async def run_cleanup(engine: AsyncEngine, make_worker, **params) -> Job:
   async with AsyncSession(engine, expire_on_commit=False) as session:
     job = await enqueue(session, JobType.cleanup, params=params)
@@ -59,7 +68,9 @@ async def test_deleting_a_dataset_deletes_its_files(worker_engine, worker_client
   dataset_id = (await worker_client.post("/datasets", json={"title": "Thermistor chain"})).json()["id"]
   other_id = (await worker_client.post("/datasets", json={"title": "Other"})).json()["id"]
   archive = write_archive(filesystem, dataset_id)
+  zarr = write_zarr(filesystem, dataset_id)
   other_archive = write_archive(filesystem, other_id)
+  other_zarr = write_zarr(filesystem, other_id)
 
   assert (await worker_client.delete(f"/datasets/{dataset_id}")).status_code == 204
   assert archive.exists()  # the API doesn't touch the files, the worker does
@@ -68,10 +79,12 @@ async def test_deleting_a_dataset_deletes_its_files(worker_engine, worker_client
   async with AsyncSession(worker_engine) as session:
     job = (await session.exec(select(Job).where(Job.type == JobType.cleanup))).one()
   assert job.status == JobStatus.succeeded
-  assert job.result == {"files_deleted": 3}
+  assert job.result == {"files_deleted": 5}
   assert not archive.exists()
+  assert not zarr.exists()
   assert (filesystem / "raw").is_dir()
   assert sorted(path.name for path in other_archive.rglob("*.nc")) == ["a.nc", "b.nc", "c.nc"]  # other datasets keep their files
+  assert len(list(other_zarr.rglob("zarr.json"))) == 2
 
 
 async def test_cleanup_without_files_succeeds(worker_engine, make_worker, filesystem):

@@ -1,15 +1,20 @@
 import asyncio
+import shutil
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
+import sqlalchemy as sa
 from pydantic import BaseModel
-from sqlmodel import col, select, update
+from sqlalchemy.dialects.postgresql import insert
+from sqlmodel import col, delete, select, update
 
 from app.enums import FileStatus
 from app.file_checks import FileCheck, check_file
-from app.models import Dataset, File, Variable
-from app.storage import raw_dir
+from app.models import Dataset, File, Partition, Variable
+from app.partitions import WrittenPartition, partition_bounds, partitions_between, write_partition
+from app.storage import raw_dir, zarr_dir
 from app.worker.context import JobContext, JobError
 
 MAX_GROUPS = 10  # problems listed in a job's error. The rest are counted
@@ -96,9 +101,101 @@ async def check_files(context: JobContext, dataset: Dataset, variables: list[Var
   return checked
 
 
-async def mark_built(context: JobContext, dataset_id: int) -> None:
+async def affected_years(context: JobContext, dataset_id: int, checked: Checked, old_files: list[File]) -> list[int]:
+  """
+  The partitions to write: the years the files that passed the checks cover, and the years `old_files` covered before the fetch
+  (changed and removed files). A dataset that has never been built writes every partition.
+  """
+  ranges = [(check.time_start, check.time_end) for check in checked.checks.values() if check.ok]
+  ranges += [(file.time_start, file.time_end) for file in old_files]
+  years = {year for start, end in ranges if start and end for year in partitions_between(start, end)}
+
+  if checked.strict:
+    # the dataset has never been built, so write every partition that has data in the archive, even if no new file covers it
+    async with context.session() as session:
+      years |= set((await session.exec(select(Partition.year).where(Partition.dataset_id == dataset_id))).all())
+
+  return sorted(years)
+
+
+async def write_partitions(context: JobContext, dataset_id: int, variables: list[Variable], years: list[int]) -> list[WrittenPartition]:
+  """
+  Writes each year to a new store, `{year}/{job_id}/` in the dataset's `zarr_dir`, from every archived file that is `new` or `ok`
+  and overlaps the year. If writing fails, the stores this job wrote are deleted and the error is raised.
+  Reports progress from 0 to 1.
+  """
   async with context.session() as session:
-    await session.exec(update(Dataset).where(col(Dataset.id) == dataset_id).values(built_at=datetime.now(UTC)))
+    # the files that are `new` or `ok` and have a time range, sorted by path so the last file's values are kept when a time step is in several files
+    query = select(File.path, File.time_start, File.time_end).where(
+      File.dataset_id == dataset_id, col(File.status).in_([FileStatus.new, FileStatus.ok]), col(File.time_start).is_not(None)
+    )
+    files = list((await session.exec(query)).all())
+
+  if years:
+    await context.log(f"Writing {len(years)} partitions: {', '.join(map(str, years))}")
+
+  archive = raw_dir(dataset_id)
+
+  written: list[WrittenPartition] = []
+  targets: list[Path] = []
+  try:
+    for done, year in enumerate(years, start=1):
+      start, end = partition_bounds(year)
+      paths = [archive / path for path, time_start, time_end in files if time_start < end and time_end >= start]
+      target = zarr_dir(dataset_id) / str(year) / str(context.job_id)
+      targets.append(target)
+
+      # in a thread, so the event loop stays free while the files are read and the store is written
+      partition = await asyncio.to_thread(write_partition, paths, variables, year, target)
+      written.append(partition)
+
+      for warning in partition.warnings:
+        await context.log(f"Warning: {warning}")
+      if partition.rows:
+        await context.log(f"{year}: {partition.rows} time steps from {len(paths)} files")
+      else:
+        await context.log(f"{year}: no data any more, the partition is removed")
+      await context.progress(done / len(years))
+  except BaseException:
+    # if writing fails, delete the stores this job wrote and raise the error
+    for target in targets:
+      shutil.rmtree(target, ignore_errors=True)
+    raise
+  return written
+
+
+async def switch_partitions(context: JobContext, dataset_id: int, written: list[WrittenPartition], passed: list[str]) -> None:
+  """
+  In one transaction: points the partitions at the stores this job wrote (removing the ones without data), marks the files that
+  passed the checks `ok`, and sets the dataset's `built_at` if any data was written.
+  """
+  async with context.session() as session:
+    for partition in written:
+      if not partition.rows:
+        # no data in the year, so remove the partition if it exists
+        await session.exec(delete(Partition).where(col(Partition.dataset_id) == dataset_id, col(Partition.year) == partition.year))
+        continue
+
+      values = {
+        "path": f"{partition.year}/{context.job_id}",
+        "rows": partition.rows,
+        "time_start": partition.time_start,
+        "time_end": partition.time_end,
+      }
+
+      statement = insert(Partition).values(dataset_id=dataset_id, year=partition.year, **values)
+      # if the partition already exists, update it with the new values and set `updated_at` to now. The `dataset_id` and `year` are the unique constraint.
+      statement = statement.on_conflict_do_update(index_elements=["dataset_id", "year"], set_={**values, "updated_at": sa.func.now()})
+
+      await session.exec(statement)
+
+    if passed:
+      # mark the files that passed the checks `ok` and clear their error. The others stay `new` or `failed`
+      await session.exec(update(File).where(col(File.dataset_id) == dataset_id, col(File.path).in_(passed)).values(status=FileStatus.ok, error=None))
+
+    if any(partition.rows for partition in written):
+      # set the dataset's `built_at` to now
+      await session.exec(update(Dataset).where(col(Dataset.id) == dataset_id).values(built_at=datetime.now(UTC)))
     await session.commit()
 
 
