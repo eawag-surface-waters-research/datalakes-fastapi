@@ -140,7 +140,7 @@ def _check_dimensions(name: str, variable: VariableCommon, var: xr.Variable, che
 
 def _check_unit(name: str, variable: VariableCommon, var: xr.Variable, check: FileCheck) -> None:
   assert variable.unit is not None
-  units = _units(var)
+  units = units_attribute(var)
   if units == variable.unit.strip():
     return
   what = "no units attribute" if units is None else f"units {units!r}"
@@ -156,7 +156,7 @@ def _check_unit(name: str, variable: VariableCommon, var: xr.Variable, check: Fi
 
 def _check_time(name: str, variable: VariableCommon, var: xr.Variable, check: FileCheck) -> None:
   """Checks that the time variable has CF units and decodes, and records the time range the file covers."""
-  units = _units(var)
+  units = units_attribute(var)
   if not (units and CF_TIME_UNITS_PATTERN.match(units)):
     check.problems.append(
       Problem(
@@ -204,7 +204,7 @@ def _check_time(name: str, variable: VariableCommon, var: xr.Variable, check: Fi
     )
 
 
-def _units(var: xr.Variable) -> str | None:
+def units_attribute(var: xr.Variable) -> str | None:
   """The `units` attribute without surrounding whitespace. If it's a list, its first value. `None` if it's missing or empty."""
   units = var.attrs.get("units")
   if units is not None and not isinstance(units, str):
