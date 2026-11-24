@@ -183,8 +183,9 @@ async def sync_dataset(dataset_id: int, session: SessionDep):
      are skipped and the log has a warning naming the subfolders. The job doesn't fail because of them.
   2. Copies new and changed files into the dataset's archive, replacing the old copy of a changed file. Removed files are deleted from
      the archive and from the index. New and changed files are marked `new` in the index.
-  3. Processes the files marked `new` into the dataset's data. A changed file replaces the data of its old version, and a removed file's
-     data is taken out. The dataset's extents and availability are recomputed, so they can shrink. Its `version` goes up if anything changed.
+  3. Processes the files marked `new` into the dataset's data, one Zarr store per year. Only the years that new, changed and removed
+     files touch are written again: a changed file replaces the data of its old version, and a removed file's data is taken out.
+     The dataset's time extent is recomputed, so it can shrink. Its `version` goes up if any data changed.
 
   **The dataset needs variables first** (422 `no_variables`). To set up a new dataset, use `fetch`, `inspect`, create the variables
   and `rebuild` instead.

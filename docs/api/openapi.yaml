@@ -2201,13 +2201,13 @@ paths:
 
         1. Lists the source and compares it with the file index. A file is **new** if the index doesn't have it, **changed** if its size or modified time differs, and **removed** if it's no longer in the source. Only the files directly in the source's folder count: if subfolders have appeared since the source was set, the files in them are skipped and the log has a warning naming the subfolders. The job doesn't fail because of them.
         2. Copies new and changed files into the dataset's archive, replacing the old copy of a changed file. Removed files are deleted from the archive and from the index. New and changed files are marked `new` in the index.
-        3. Processes the files marked `new` into the dataset's data. A changed file replaces the data of its old version, and a removed file's data is taken out. The dataset's extents and availability are recomputed, so they can shrink. Its `version` goes up if anything changed.
+        3. Processes the files marked `new` into the dataset's data, one Zarr store per year. Only the years that new, changed and removed files touch are written again: a changed file replaces the data of its old version, and a removed file's data is taken out. The dataset's time extent is recomputed, so it can shrink. Its `version` goes up if any data changed.
 
         **The dataset needs variables first** (422 `no_variables`). To set up a new dataset, use `fetch`, `inspect`, create the variables and `rebuild` instead.
 
         **File checks.** Before a file is processed, it's checked against the dataset's variables. It must be NetCDF (`.nc`), contain every variable's `source_name` with the declared dimensions and, where the variable has a `unit`, the same `units`. Time must have CF units, e.g. `seconds since 1970-01-01 00:00:00`. Variables the dataset doesn't use are fine: they're named in a warning in the log.
 
-        A file that fails the checks, or can't be processed, is marked `failed` in the file index with every problem found. The other files are still processed, and the job ends as `failed` so the problem is noticed. A file in another format is marked `ignored` and doesn't fail the job. This applies once the dataset has been built: before that, see `rebuild`.
+        A file that fails the checks is marked `failed` in the file index with every problem found, and isn't checked again until it changes in the source. The other files are still written, and the job ends as `failed` with the problems grouped, so they're noticed. A file in another format is marked `ignored` and doesn't fail the job. This applies once the dataset has been built: before that, see `rebuild`. If a year's data can't be written, nothing is switched and the job fails.
 
         **External callers**, such as a processing pipeline, call this endpoint after uploading new data to the source. Some datasets update every 20 minutes, so a sync with nothing new is cheap. External callers use the dataset's sync token.
 
@@ -2359,19 +2359,22 @@ paths:
                   type: sync
                   status: failed
                   progress: 1
-                  error: "1 of 3 new files failed: L2_ThermistorChain_202410.nc: variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
-                  log: "Copied 3 files (52.1 MB)\nL2_ThermistorChain_202410.nc failed: variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
+                  error: "1 of 3 new files failed the checks and were skipped\n- 1 of 3 files: no variable 'temp' (source of 'temperature') (L2_ThermistorChain_202410.nc)"
+                  log: "Listing the source\n3 new, 0 changed, 0 removed and 64 unchanged files\nCopying 3 files (54632118 bytes)\nDone: copied 3 files (54632118 bytes), removed 0\nChecking 3 new files against 4 variables\n2 files passed the checks, 1 failed\nWriting 1 partitions: 2024\n2024: 43200 time steps from 10 files\nSwitched to the new data, the dataset's version is now 42"
                   result:
                     files_new: 3
                     files_changed: 0
                     files_removed: 0
                     files_unchanged: 64
                     bytes_copied: 54632118
-                    files_processed: 2
+                    files_checked: 3
+                    files_ignored: 0
                     files_failed:
                       - path: L2_ThermistorChain_202410.nc
-                        codes: [missing_variable]
-                        error: "variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
+                        error: "no variable 'temp' (source of 'temperature')"
+                    years_written: [2024]
+                    years_removed: []
+                    version: 42
                   created_at: "2024-10-30T00:00:02Z"
                   started_at: "2024-10-30T00:00:03Z"
                   finished_at: "2024-10-30T00:05:31Z"
@@ -3475,14 +3478,15 @@ components:
           description: |
             What the job produced. Its shape depends on `type`:
 
-            - `fetch`: `SyncResult`, what was copied and removed, with nothing processed.
-            - `sync`: `SyncResult`, what was copied, removed and processed.
+            - `fetch`: `FetchResult`, what was copied and removed.
+            - `sync`: `SyncResult`, what was copied and removed, then checked and written.
             - `rebuild`: `SyncResult`, with nothing copied.
             - `export`: `{"export_id": …}`. The export itself is at `GET /exports/{export_id}`.
 
             `null` until the job ends.
           anyOf:
             - $ref: "#/components/schemas/SyncResult"
+            - $ref: "#/components/schemas/FetchResult"
             - type: object
             - type: "null"
         created_at:
@@ -3530,10 +3534,10 @@ components:
       items:
         $ref: "#/components/schemas/Job"
 
-    SyncResult:
+    FetchResult:
       type: object
-      description: The result of a fetch, sync or rebuild job.
-      required: [files_new, files_changed, files_removed, files_unchanged, bytes_copied, files_processed, files_failed]
+      description: The result of a fetch job, and the first part of a sync's.
+      required: [files_new, files_changed, files_removed, files_unchanged, bytes_copied]
       properties:
         files_new:
           type: integer
@@ -3542,41 +3546,63 @@ components:
         files_changed:
           type: integer
           minimum: 0
-          description: Files copied again because they changed in the source. Their old data is replaced.
+          description: Files copied again because their size or modification time changed in the source, or because they were missing from the archive.
         files_removed:
           type: integer
           minimum: 0
-          description: Files deleted from the archive because they're no longer in the source. Their data is taken out of the dataset.
+          description: Files deleted from the archive because they're no longer in the source.
         files_unchanged:
           type: integer
           minimum: 0
-          description: Files skipped because the archive already has them.
+          description: Files skipped because the archive already has them as they are in the source.
         bytes_copied:
           type: integer
           minimum: 0
-        files_processed:
-          type: integer
-          minimum: 0
-          description: New and changed files added to the dataset's data. Removed files' data taken out isn't counted here.
-        files_failed:
-          type: array
-          description: Files that didn't pass the file checks or couldn't be processed. They're marked `failed` in the file index.
-          items:
-            type: object
-            required: [path, codes, error]
-            properties:
-              path:
-                type: string
-              codes:
-                type: array
-                description: One code per problem found in the file.
-                items:
-                  type: string
-                  enum: [unsupported_format, unreadable_file, missing_variable, wrong_dimensions, unit_mismatch, invalid_time_units]
-                examples: [[missing_variable]]
-              error:
-                type: string
-                description: Every problem found in the file, each naming the variable, what was expected and what was found.
+
+    SyncResult:
+      description: |
+        The result of a sync or rebuild job: the fetch's counts, then what was checked and written.
+        A sync that fails because of files that failed the checks keeps its result, so it shows what was written all the same.
+      allOf:
+        - $ref: "#/components/schemas/FetchResult"
+        - type: object
+          required: [files_checked, files_ignored, files_failed, years_written, years_removed, version]
+          properties:
+            files_checked:
+              type: integer
+              minimum: 0
+              description: Files checked against the dataset's variables. Every archived file if the dataset has never been built, otherwise the files marked `new`.
+            files_ignored:
+              type: integer
+              minimum: 0
+              description: Files that aren't NetCDF, marked `ignored` and left out of the data. Only once the dataset has been built; before that, they fail the job.
+            files_failed:
+              type: array
+              description: Files that failed the checks, marked `failed` in the file index. Their data is left out.
+              items:
+                type: object
+                required: [path, error]
+                properties:
+                  path:
+                    type: string
+                  error:
+                    type: string
+                    description: Every problem found in the file, one per line, each naming the variable, what was expected and what was found.
+            years_written:
+              type: array
+              description: The partitions (years) written to new stores. Only the years that new, changed and removed files touch.
+              items:
+                type: integer
+              examples: [[2024]]
+            years_removed:
+              type: array
+              description: The partitions (years) removed because no file has data in them any more.
+              items:
+                type: integer
+              examples: [[]]
+            version:
+              type: integer
+              description: The dataset's version after the job. It goes up when a partition is written or removed.
 
     # -------------------------------------------------------------------------
     # Sources
@@ -6207,26 +6233,29 @@ components:
         finished_at: null
 
     FailedSyncJob:
-      summary: A failed sync, with one file that couldn't be processed
+      summary: A failed sync, with one file that failed the checks
       value:
         id: 5790
         dataset_id: 123
         type: sync
         status: failed
         progress: 1
-        error: "1 of 3 new files failed: L2_ThermistorChain_202410.nc: variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
-        log: "Copied 3 files (52.1 MB)\nProcessed L2_ThermistorChain_202408.nc\nProcessed L2_ThermistorChain_202409.nc\nL2_ThermistorChain_202410.nc failed: variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
+        error: "1 of 3 new files failed the checks and were skipped\n- 1 of 3 files: no variable 'temp' (source of 'temperature') (L2_ThermistorChain_202410.nc)"
+        log: "Listing the source\n3 new, 0 changed, 0 removed and 64 unchanged files\nCopying 3 files (54632118 bytes)\nDone: copied 3 files (54632118 bytes), removed 0\nChecking 3 new files against 4 variables\n2 files passed the checks, 1 failed\nWriting 1 partitions: 2024\n2024: 43200 time steps from 10 files\nSwitched to the new data, the dataset's version is now 42"
         result:
           files_new: 3
           files_changed: 0
           files_removed: 0
           files_unchanged: 64
           bytes_copied: 54632118
-          files_processed: 2
+          files_checked: 3
+          files_ignored: 0
           files_failed:
             - path: L2_ThermistorChain_202410.nc
-              codes: [missing_variable]
-              error: "variable 'temp' (source of 'temperature') is missing. Add it to the file, or change the variable's source_name."
+              error: "no variable 'temp' (source of 'temperature')"
+          years_written: [2024]
+          years_removed: []
+          version: 42
         created_at: "2024-10-30T00:00:02Z"
         started_at: "2024-10-30T00:00:03Z"
         finished_at: "2024-10-30T00:05:31Z"

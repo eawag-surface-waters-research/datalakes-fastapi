@@ -27,6 +27,15 @@ class FailedFile(BaseModel):
 
 
 @dataclass
+class Switched:
+  """What `switch_partitions` changed."""
+
+  years_written: list[int]  # partitions pointed at a new store
+  years_removed: list[int]  # partitions removed because they have no data any more
+  version: int  # the dataset's version afterwards
+
+
+@dataclass
 class Checked:
   """The outcome of checking the files to build."""
 
@@ -164,16 +173,20 @@ async def write_partitions(context: JobContext, dataset_id: int, variables: list
   return written
 
 
-async def switch_partitions(context: JobContext, dataset_id: int, written: list[WrittenPartition], passed: list[str]) -> None:
+async def switch_partitions(context: JobContext, dataset_id: int, written: list[WrittenPartition], passed: list[str]) -> Switched:
   """
   In one transaction: points the partitions at the stores this job wrote (removing the ones without data), marks the files that
-  passed the checks `ok`, and sets the dataset's `built_at` if any data was written.
+  passed the checks `ok`, and, if a partition changed, recomputes the dataset's time extent from its partitions and increases its
+  `version`. `built_at` is set if any data was written.
   """
+  years_written, years_removed = [], []
   async with context.session() as session:
     for partition in written:
       if not partition.rows:
-        # no data in the year, so remove the partition if it exists
-        await session.exec(delete(Partition).where(col(Partition.dataset_id) == dataset_id, col(Partition.year) == partition.year))
+        # no data in the year any more, so remove the partition if it exists
+        removed = await session.exec(delete(Partition).where(col(Partition.dataset_id) == dataset_id, col(Partition.year) == partition.year))
+        if removed.rowcount:
+          years_removed.append(partition.year)
         continue
 
       values = {
@@ -182,21 +195,34 @@ async def switch_partitions(context: JobContext, dataset_id: int, written: list[
         "time_start": partition.time_start,
         "time_end": partition.time_end,
       }
-
       statement = insert(Partition).values(dataset_id=dataset_id, year=partition.year, **values)
-      # if the partition already exists, update it with the new values and set `updated_at` to now. The `dataset_id` and `year` are the unique constraint.
+      # if the partition already exists, point it at the new store. The `dataset_id` and `year` are the unique constraint.
       statement = statement.on_conflict_do_update(index_elements=["dataset_id", "year"], set_={**values, "updated_at": sa.func.now()})
-
       await session.exec(statement)
+      years_written.append(partition.year)
 
     if passed:
       # mark the files that passed the checks `ok` and clear their error. The others stay `new` or `failed`
       await session.exec(update(File).where(col(File.dataset_id) == dataset_id, col(File.path).in_(passed)).values(status=FileStatus.ok, error=None))
 
-    if any(partition.rows for partition in written):
-      # set the dataset's `built_at` to now
-      await session.exec(update(Dataset).where(col(Dataset.id) == dataset_id).values(built_at=datetime.now(UTC)))
+    if years_written or years_removed:
+      # the extent is recomputed from every partition, so it shrinks when data is removed, and is `null` when none is left
+      extent = select(sa.func.min(Partition.time_start), sa.func.max(Partition.time_end)).where(Partition.dataset_id == dataset_id)
+      time_start, time_end = (await session.exec(extent)).one()
+      values = {"time_start": time_start, "time_end": time_end, "version": col(Dataset.version) + 1}
+
+      if years_written:
+        # the dataset has data now, so set `built_at` if it was `null` before. It is not changed when the dataset already had data
+        values["built_at"] = datetime.now(UTC)
+
+      statement = update(Dataset).where(col(Dataset.id) == dataset_id).values(**values).returning(col(Dataset.version))
+      version = (await session.exec(statement)).scalar_one()
+    else:
+      # no partition changed, so the version is not increased
+      version = (await session.exec(select(Dataset.version).where(Dataset.id == dataset_id))).one()
+
     await session.commit()
+  return Switched(years_written=years_written, years_removed=years_removed, version=version)
 
 
 def file_error(check: FileCheck) -> str:

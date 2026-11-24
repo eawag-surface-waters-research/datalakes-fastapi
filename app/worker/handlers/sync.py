@@ -15,13 +15,18 @@ class SyncResult(FetchResult):
   files_checked: int = Field(description="Files checked against the dataset's variables")
   files_ignored: int = Field(description="Files that aren't NetCDF, left out of the data")
   files_failed: list[FailedFile] = Field(description="Files that failed the checks, with their problems")
+  years_written: list[int] = Field(default_factory=list, description="Partitions (years) written to new stores")
+  years_removed: list[int] = Field(default_factory=list, description="Partitions (years) removed because they have no data any more")
+  version: int = Field(description="The dataset's version after the job. It goes up when a partition is written or removed")
 
 
 class SyncHandler(Handler[NoParams]):
   """
   Updates a dataset from its source: a fetch, then processing of the new, changed and removed files.
   The data is written to Zarr, one store per year, and only the years that the new, changed and removed files touch are written again.
-  If the fetch fails, the sync fails with the fetch's error. If a file fails the checks, the sync fails with every file's problems.
+  Switching to the new stores also recomputes the dataset's time extent and increases its `version`.
+  If the fetch fails, the sync fails with the fetch's error. If a file fails the checks, the sync fails with every file's problems,
+  after the files that passed were written, unless the dataset has never been built.
   """
 
   type = JobType.sync
@@ -48,7 +53,11 @@ class SyncHandler(Handler[NoParams]):
     with context.progress_range(FETCH_PROGRESS, CHECK_PROGRESS):
       checked = await check_files(context, dataset, variables)
     result = SyncResult(
-      **fetched.result.model_dump(), files_checked=len(checked.checks), files_ignored=len(checked.ignored), files_failed=checked.failed_files
+      **fetched.result.model_dump(),
+      files_checked=len(checked.checks),
+      files_ignored=len(checked.ignored),
+      files_failed=checked.failed_files,
+      version=dataset.version,
     )
     if checked.strict and checked.failed:
       raise JobError(checked.error(), result=result)
@@ -63,12 +72,13 @@ class SyncHandler(Handler[NoParams]):
       except PartitionError as error:
         raise JobError(f"Nothing was written: {error}", result=result) from None
 
-    # 6. In one transaction: switch to the new stores, mark the written files `ok` and set `built_at`.
-    await switch_partitions(context, context.dataset_id, written, checked.passed)
+    # 6. In one transaction: switch to the new stores, mark the written files `ok`, recompute the time extent and increase the `version`.
+    switched = await switch_partitions(context, context.dataset_id, written, checked.passed)
+    result.years_written, result.years_removed, result.version = switched.years_written, switched.years_removed, switched.version
+    if switched.years_written or switched.years_removed:
+      await context.log(f"Switched to the new data, the dataset's version is now {switched.version}")
 
-    # TODO: 6. Recompute the dataset's extents and coverage, and increase its `version` if anything changed.
-
-    # TODO: 7. Return the fetch's counts with the processing's. If a file failed, fail the job with the grouped problems. Maybe also send mail/alert
+    # 7. If a file failed, fail the job with the grouped problems, with the result of what was written
     if checked.failed:
       raise JobError(checked.error(), result=result)
     return result

@@ -62,11 +62,15 @@ async def mark_built(engine: AsyncEngine, dataset_id: int) -> None:
     await session.commit()
 
 
-async def built_at(engine: AsyncEngine, dataset_id: int) -> datetime | None:
+async def get_dataset(engine: AsyncEngine, dataset_id: int) -> Dataset:
   async with AsyncSession(engine) as session:
     dataset = await session.get(Dataset, dataset_id)
     assert dataset is not None
-    return dataset.built_at
+    return dataset
+
+
+async def built_at(engine: AsyncEngine, dataset_id: int) -> datetime | None:
+  return (await get_dataset(engine, dataset_id)).built_at
 
 
 async def sync(engine: AsyncEngine, make_worker, dataset_id: int) -> Job:
@@ -93,7 +97,7 @@ def archive_paths(filesystem: Path, dataset_id: int) -> list[str]:
 
 
 def sync_result(**counts) -> dict:
-  return result() | {"files_checked": 0, "files_ignored": 0, "files_failed": []} | counts
+  return result() | {"files_checked": 0, "files_ignored": 0, "files_failed": [], "years_written": [], "years_removed": [], "version": 1} | counts
 
 
 async def test_sync_writes_the_data(worker_engine, make_worker, bucket, filesystem, tmp_path):
@@ -105,10 +109,10 @@ async def test_sync_writes_the_data(worker_engine, make_worker, bucket, filesyst
 
   job = await sync(worker_engine, make_worker, dataset_id)
   assert job.status == JobStatus.succeeded, job.error
-  assert job.result == sync_result(files_new=2, bytes_copied=len(a) + len(b), files_checked=2)
+  assert job.result == sync_result(files_new=2, bytes_copied=len(a) + len(b), files_checked=2, years_written=[2023], version=2)
   assert job.log.startswith("Listing the source\n")
   assert "Checking 2 archived files against 2 variables" in job.log
-  assert job.log.endswith("Writing 1 partitions: 2023\n2023: 4 time steps from 2 files")
+  assert job.log.endswith("Writing 1 partitions: 2023\n2023: 4 time steps from 2 files\nSwitched to the new data, the dataset's version is now 2")
   assert set(archive_paths(filesystem, dataset_id)) == {"a.nc", "b.nc"}
 
   files = await index(worker_engine, dataset_id)
@@ -126,7 +130,9 @@ async def test_sync_writes_the_data(worker_engine, make_worker, bucket, filesyst
     datetime(2023, 11, 15, 22, 23, 20, tzinfo=UTC),
   )
   assert read_partition(filesystem, dataset_id, partition)["temperature"].values.tolist() == [10.5, 11.0, 10.5, 11.0]
-  assert await built_at(worker_engine, dataset_id) is not None
+  dataset = await get_dataset(worker_engine, dataset_id)
+  assert dataset.built_at is not None
+  assert (dataset.time_start, dataset.time_end, dataset.version) == (partition.time_start, partition.time_end, 2)
 
 
 async def test_sync_warns_about_unused_variables(worker_engine, make_worker, bucket, filesystem, tmp_path):
@@ -195,7 +201,7 @@ async def test_new_dataset_checks_every_file_again(worker_engine, make_worker, b
 
   job = await sync(worker_engine, make_worker, dataset_id)
   assert job.status == JobStatus.succeeded, job.error
-  assert job.result == sync_result(files_unchanged=1, files_checked=1)
+  assert job.result == sync_result(files_unchanged=1, files_checked=1, years_written=[2023], version=2)
   file = (await index(worker_engine, dataset_id))["a.nc"]
   assert (file.status, file.error) == (FileStatus.ok, None)
   assert set(await partitions(worker_engine, dataset_id)) == {2023}
@@ -215,6 +221,7 @@ async def test_built_dataset_skips_bad_files_and_ignores_other_formats(worker_en
   assert job.result is not None
   assert (job.result["files_checked"], job.result["files_ignored"]) == (3, 1)
   assert job.result["files_failed"] == [{"path": "b.nc", "error": "no variable 'temp' (source of 'temperature')"}]
+  assert (job.result["years_written"], job.result["version"]) == ([2023], 2)  # a.nc was written all the same
   assert "Ignored 1 files that aren't NetCDF, e.g. notes.txt" in job.log
 
   files = await index(worker_engine, dataset_id)
@@ -281,7 +288,9 @@ async def test_second_sync_processes_only_the_changes(worker_engine, make_worker
   bucket.remove("b.nc")
   job = await sync(worker_engine, make_worker, dataset_id)
   assert job.status == JobStatus.succeeded, job.error
-  assert job.result == sync_result(files_new=1, files_removed=1, files_unchanged=1, bytes_copied=len(c), files_checked=1)
+  assert job.result == sync_result(
+    files_new=1, files_removed=1, files_unchanged=1, bytes_copied=len(c), files_checked=1, years_written=[2023], version=3
+  )
   assert sorted(archive_paths(filesystem, dataset_id)) == ["a.nc", "c.nc"]
 
   # 2023 is written again from a.nc and c.nc. The replaced store stays on disk
@@ -318,7 +327,11 @@ async def test_removing_the_last_file_of_a_year_removes_its_partition(worker_eng
   job = await sync(worker_engine, make_worker, dataset_id)
   assert job.status == JobStatus.succeeded, job.error
   assert "2023: no data any more, the partition is removed" in job.log
+  assert job.result is not None
+  assert (job.result["years_written"], job.result["years_removed"], job.result["version"]) == ([], [2023], 3)
   assert set(await partitions(worker_engine, dataset_id)) == {2024}
+  dataset = await get_dataset(worker_engine, dataset_id)
+  assert dataset.time_start == datetime(2024, 3, 9, 16, tzinfo=UTC)  # the extent shrinks
   assert stores(filesystem, dataset_id) == [f"2023/{first.id}", f"2024/{first.id}"]  # nothing is deleted from disk yet
 
 
@@ -332,7 +345,26 @@ async def test_changed_file_moving_to_another_year(worker_engine, make_worker, b
   job = await sync(worker_engine, make_worker, dataset_id)
   assert job.status == JobStatus.succeeded, job.error
   assert "Writing 2 partitions: 2023, 2024" in job.log  # the old year from the index, the new one from the check
+  assert job.result is not None
+  assert (job.result["years_written"], job.result["years_removed"]) == ([2024], [2023])
   assert {year: partition.rows for year, partition in (await partitions(worker_engine, dataset_id)).items()} == {2024: 3}
+  dataset = await get_dataset(worker_engine, dataset_id)
+  assert (dataset.time_start, dataset.time_end) == (datetime(2024, 3, 9, 16, tzinfo=UTC), datetime(2024, 3, 9, 16, 20, tzinfo=UTC))
+
+
+async def test_sync_without_changes_keeps_the_version(worker_engine, make_worker, bucket, filesystem, tmp_path):
+  bucket.put("a.nc", netcdf(tmp_path))
+  dataset_id = await add_dataset(worker_engine, bucket)
+  await add_variables(worker_engine, dataset_id)
+  await sync(worker_engine, make_worker, dataset_id)
+  first = await get_dataset(worker_engine, dataset_id)
+
+  job = await sync(worker_engine, make_worker, dataset_id)
+  assert job.status == JobStatus.succeeded, job.error
+  assert job.result == sync_result(files_unchanged=1, version=2)
+  assert "Switched" not in job.log
+  dataset = await get_dataset(worker_engine, dataset_id)
+  assert (dataset.version, dataset.built_at) == (2, first.built_at)
 
 
 async def test_partition_that_cant_be_written_fails_and_switches_nothing(worker_engine, make_worker, bucket, filesystem, tmp_path):
@@ -356,7 +388,8 @@ async def test_partition_that_cant_be_written_fails_and_switches_nothing(worker_
   assert await partitions(worker_engine, dataset_id) == {}
   assert stores(filesystem, dataset_id) == []  # the store it started is deleted
   assert (await index(worker_engine, dataset_id))["a.nc"].status == FileStatus.new
-  assert await built_at(worker_engine, dataset_id) is None
+  dataset = await get_dataset(worker_engine, dataset_id)
+  assert (dataset.built_at, dataset.time_start, dataset.version) == (None, None, 1)
 
 
 async def test_sync_fails_when_its_fetch_fails(worker_engine, make_worker, bucket, filesystem, tmp_path):
