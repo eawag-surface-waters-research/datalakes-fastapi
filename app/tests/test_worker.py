@@ -261,6 +261,17 @@ async def test_cancel_running_job(worker_engine, make_worker, worker_client):
   assert job.log.endswith("Cancelled while running")
 
 
+async def test_job_running_longer_than_the_timeout_is_cancelled(worker_engine, make_worker):
+  job_id = await queue(worker_engine, seconds=30)
+  async with asyncio.timeout(5):  # long before the job's 30 s
+    await make_worker(job_timeout=0.2).run_once()
+  job = await get_job(worker_engine, job_id)
+  assert job.status == JobStatus.cancelled
+  assert job.finished_at is not None
+  assert job.error == "Cancelled after running longer than the job timeout of 0.2 s"
+  assert job.log.endswith(job.error)
+
+
 async def test_cancelled_queued_job_never_runs(worker_engine, make_worker, worker_client):
   job_id = await queue(worker_engine)
   response = await worker_client.post(f"/jobs/{job_id}/cancel")

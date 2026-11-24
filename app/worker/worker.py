@@ -6,6 +6,7 @@ import asyncio
 import logging
 import signal
 from contextlib import suppress
+from enum import StrEnum
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
@@ -22,6 +23,11 @@ from app.worker.queue import claim, recover_orphans, update_job
 logger = logging.getLogger(__name__)
 
 
+class CancelReason(StrEnum):
+  user = "user"  # a user asked to cancel the job
+  timeout = "timeout"  # the job ran longer than the worker's job timeout
+
+
 class Worker:
   """
   Runs queued jobs one at a time until `stop()` is called.
@@ -34,11 +40,13 @@ class Worker:
     handlers: dict[JobType, Handler] | None = None,
     poll_interval: float = 2.0,
     recover_interval: float = 60.0,
+    job_timeout: float | None = None,
   ):
     self.engine: AsyncEngine = engine
     self.handlers: dict[JobType, Handler] = HANDLERS_BY_TYPE if handlers is None else handlers
     self.poll_interval: float = poll_interval
     self.recover_interval: float = recover_interval
+    self.job_timeout: float | None = job_timeout  # seconds a job may run before it's cancelled. `None`: no limit
     self._stopping = asyncio.Event()
     self._work_task: asyncio.Task | None = None  # the running handler
 
@@ -103,11 +111,15 @@ class Worker:
       if self._stopping.is_set():
         work_task.cancel()  # `stop()` was called while the job was being claimed
 
-      cancelled_by_user = await self._watch(job_id, conn, work_task)  # wait until the job's handler has ended
+      cancel_reason = await self._watch(job_id, conn, work_task)  # wait until the job's handler has ended
 
-      if cancelled_by_user:
+      if cancel_reason == CancelReason.user:
         logger.info("Job %s: cancelled", job_id)
         await update_job(conn, job_id, log="Cancelled while running", status=JobStatus.cancelled, finished_at=sa.func.now())
+      elif cancel_reason == CancelReason.timeout:
+        error = f"Cancelled after running longer than the job timeout of {self.job_timeout:g} s"
+        logger.warning("Job %s: %s", job_id, error)
+        await update_job(conn, job_id, log=error, status=JobStatus.cancelled, error=error, finished_at=sa.func.now())
       elif work_task.cancelled():
         logger.info("Job %s: the worker is stopping. Queuing the job again", job_id)
         await update_job(
@@ -139,25 +151,40 @@ class Worker:
         await context.close()
       await conn.close()  # also releases the job's lock
 
-  async def _watch(self, job_id: int, conn: AsyncConnection, work: asyncio.Task) -> bool:
+  async def _watch(self, job_id: int, conn: AsyncConnection, work: asyncio.Task) -> CancelReason | None:
     """
-    Waits until the job's handler has ended, and stops it if a user asks to cancel the job. Returns whether a user cancelled it.
+    Waits until the job's handler has ended, and stops it if a user asks to cancel the job or it runs longer than `job_timeout`.
+    Returns why it was stopped, or `None` if the handler ended by itself.
     Raises if the connection that holds the job's lock fails.
     """
+    loop = asyncio.get_running_loop()
+    deadline = None if self.job_timeout is None else loop.time() + self.job_timeout
+
     while not work.done():
-      await asyncio.wait({work}, timeout=self.poll_interval)
+      # wake up at the next poll, or at the deadline if it's sooner
+      timeout = self.poll_interval if deadline is None else max(0.0, min(self.poll_interval, deadline - loop.time()))
+      await asyncio.wait({work}, timeout=timeout)
+
       if work.done():
+        # either the handler ended by itself or it was cancelled by the worke
         break
 
-      cancel_requested_at = (await conn.execute(select(Job.cancel_requested_at).where(Job.id == job_id))).scalar_one()
-      await conn.commit()
+      reason = None
+      if deadline is not None and loop.time() >= deadline:
+        # we're past the job's timeout
+        reason = CancelReason.timeout
+      else:
+        cancel_requested_at = (await conn.execute(select(Job.cancel_requested_at).where(Job.id == job_id))).scalar_one()
+        await conn.commit()
+        if cancel_requested_at is not None:
+          reason = CancelReason.user
 
-      # a user asked to cancel the job => stop the handler and mark the job cancelled
-      if cancel_requested_at is not None:
+      # stop the handler. The caller marks the job cancelled
+      if reason is not None:
         work.cancel()
         await asyncio.gather(work, return_exceptions=True)
-        return True
-    return False
+        return reason
+    return None
 
 
 def worker_engine() -> AsyncEngine:
@@ -165,9 +192,9 @@ def worker_engine() -> AsyncEngine:
   return create_async_engine(DATABASE_URL, poolclass=NullPool)
 
 
-async def run_worker(poll_interval: float) -> None:
+async def run_worker(poll_interval: float, job_timeout: float | None = None) -> None:
   engine = worker_engine()
-  worker = Worker(engine, poll_interval=poll_interval)
+  worker = Worker(engine, poll_interval=poll_interval, job_timeout=job_timeout)
 
   loop = asyncio.get_running_loop()
   loop.add_signal_handler(signal.SIGTERM, worker.stop)

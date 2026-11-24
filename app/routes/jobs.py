@@ -176,6 +176,7 @@ async def get_job(job_id: int, session: SessionDep):
 
   A job moves from `queued` to `running`, then ends as `succeeded`, `failed` or `cancelled`. If the worker stops while running a job
   (e.g. a restart), the job is queued again and runs from the start. After the worker stopped three times on the same job, the job fails.
+  A job that runs longer than the worker's job timeout is cancelled, with the reason in `error`.
 
   **Access:** public.
   """

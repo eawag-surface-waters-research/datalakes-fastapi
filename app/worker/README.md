@@ -16,7 +16,7 @@ Runs the background jobs queued in the `jobs` table. It's a separate process fro
 1. The API (or a script) calls `enqueue()`, which inserts a `queued` job.
 2. The worker's `claim()` takes the oldest queued job, takes its advisory lock and marks it `running`, in one transaction.
 3. `_execute()` looks up the handler for the job's type and runs it. The handler validates the `params`, does the work, and reports through `context.log()` and `context.progress()`.
-4. While the handler runs, `_watch()` checks every `poll_interval` whether a user asked to cancel the job.
+4. While the handler runs, `_watch()` checks every `poll_interval` whether a user asked to cancel the job, and cancels it once it has run longer than `job_timeout`.
 5. When the handler ends, the worker records the outcome (status, result or error), then closes the job's connection, which releases the lock.
 
 A job's status changes like this:
@@ -35,6 +35,7 @@ stateDiagram-v2
 
 Status changes are triggered by these events:
 - Cancel: `POST /jobs/{id}/cancel` cancels a queued job. For a running job it sets `cancel_requested_at`. `_watch` sees it and stops the handler.
+- Timeout: a job that has run longer than `job_timeout` is stopped and marked `cancelled`, with the reason in `error`.
 - Stop (SIGTERM, SIGINT): the running handler is stopped and the job is queued again.
 - Crash: Postgres releases the advisory lock with the dead connection. `recover_orphans` (at start and every minute) finds `running` jobs it can lock and queues them again, or fails them after `MAX_RESTARTS`.
 

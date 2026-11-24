@@ -67,6 +67,7 @@ services:
       DB_DATABASE: "${DB_DATABASE}"
       PRODUCTION: "${PRODUCTION}"
       SOURCE_ALLOW_PRIVATE_ENDPOINTS: "${SOURCE_ALLOW_PRIVATE_ENDPOINTS}"
+      WORKER_JOB_TIMEOUT: "${WORKER_JOB_TIMEOUT}"
     container_name:
       datalakes-worker
     restart: unless-stopped

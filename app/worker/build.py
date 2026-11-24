@@ -1,3 +1,4 @@
+import asyncio
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -82,7 +83,8 @@ async def check_files(context: JobContext, dataset: Dataset, variables: list[Var
 
   checks: dict[str, FileCheck] = {}
   for done, path in enumerate(paths, start=1):
-    checks[path] = check_file(archive_path / path, variables)
+    # in a thread, so the event loop stays free and the worker sees cancel requests and timeouts while a big file is checked
+    checks[path] = await asyncio.to_thread(check_file, archive_path / path, variables)
     await context.progress(done / len(paths))
 
   failed = [path for path, check in checks.items() if not check.ok and (strict or not check.unsupported)]
