@@ -89,7 +89,7 @@ app.add_middleware(
   allow_headers=["*"],
   expose_headers=["ETag"],  # so the website can read a response's ETag and send it back in `If-None-Match`
 )
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5)
 
 
 add_exception_handlers(app)
