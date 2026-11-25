@@ -174,3 +174,9 @@ def test_a_file_collects_every_problem(tmp_path):
   check = check_file(write(tmp_path, dataset(time_attrs={"units": "days"}, temp_attrs={"units": "K"})), variables)
   assert codes(check) == [ProblemCode.invalid_time_units, ProblemCode.unit_mismatch, ProblemCode.missing_variable]
   assert [problem.variable for problem in check.problems] == ["time", "temperature", "oxygen"]
+
+
+def test_depths_are_recorded_for_the_depth_variable(tmp_path):
+  path = write(tmp_path, dataset())
+  assert check_file(path, VARIABLES).depths is None  # without a depth variable, e.g. for a timeSeries
+  assert check_file(path, VARIABLES, VARIABLES[1]).depths == (0.5, 1.0)

@@ -1,10 +1,11 @@
 import asyncio
 import shutil
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+import numpy as np
 import sqlalchemy as sa
 from pydantic import BaseModel
 from sqlalchemy.dialects.postgresql import insert
@@ -12,8 +13,9 @@ from sqlmodel import col, delete, select, update
 
 from app.enums import FeatureType, FileStatus
 from app.file_checks import FileCheck, check_file
-from app.models import Dataset, File, Partition, Variable
+from app.models import Dataset, DepthLayout, File, Partition, Variable
 from app.partitions import WrittenPartition, partition_bounds, partitions_between, write_partition
+from app.schemas.variables import VariableCommon
 from app.storage import raw_dir, zarr_dir
 from app.worker.context import JobContext, JobError
 
@@ -30,8 +32,8 @@ class FailedFile(BaseModel):
 class Switched:
   """What `switch_partitions` changed."""
 
-  years_written: list[int]  # partitions pointed at a new store
-  years_removed: list[int]  # partitions removed because they have no data any more
+  years_written: list[int]  # years with a partition pointed at a new store
+  years_removed: list[int]  # years whose last partition was removed because it has no data any more
   version: int  # the dataset's version afterwards
 
 
@@ -43,6 +45,7 @@ class Checked:
   checks: dict[str, FileCheck]  # by path, every checked file
   failed: list[str]  # paths of the files that failed, including the unsupported ones when strict
   ignored: list[str]  # paths of the unsupported files of a built dataset
+  layouts: dict[str, int | None] = field(default_factory=dict)  # by path, the depth layout of each file that passed
 
   @property
   def passed(self) -> list[str]:
@@ -74,7 +77,7 @@ async def load_variables(context: JobContext, dataset_id: int) -> tuple[Dataset,
   return dataset, variables
 
 
-async def check_files(context: JobContext, dataset: Dataset, variables: list[Variable]) -> Checked:
+async def check_files(context: JobContext, dataset: Dataset, variables: list[Variable], depth_variable: VariableCommon | None = None) -> Checked:
   """
   Checks the files to build and records the outcome in the file index: a failing file is marked `failed` with its problems, a file
   that isn't NetCDF `ignored` (built datasets only), and a passing file stays `new` with the time range it covers.
@@ -98,7 +101,7 @@ async def check_files(context: JobContext, dataset: Dataset, variables: list[Var
   checks: dict[str, FileCheck] = {}
   for done, path in enumerate(paths, start=1):
     # in a thread, so the event loop stays free and the worker sees cancel requests and timeouts while a big file is checked
-    checks[path] = await asyncio.to_thread(check_file, archive_path / path, variables)
+    checks[path] = await asyncio.to_thread(check_file, archive_path / path, variables, depth_variable)
     await context.progress(done / len(paths))
 
   failed = [path for path, check in checks.items() if not check.ok and (strict or not check.unsupported)]
@@ -110,63 +113,81 @@ async def check_files(context: JobContext, dataset: Dataset, variables: list[Var
   return checked
 
 
-async def affected_years(context: JobContext, dataset_id: int, checked: Checked, old_files: list[File]) -> list[int]:
+type PartitionKey = tuple[int, int | None]  # (year, depth layout). The layout is `None` for a `timeSeries`
+
+
+def partition_label(key: PartitionKey) -> str:
+  year, layout = key
+  return str(year) if layout is None else f"{year} (depth layout {layout})"
+
+
+async def affected_partitions(context: JobContext, dataset_id: int, checked: Checked, old_files: list[File]) -> list[PartitionKey]:
   """
-  The partitions to write: the years the files that passed the checks cover, and the years `old_files` covered before the fetch
-  (changed and removed files). A dataset that has never been built writes every partition.
+  The partitions to write: the years and depth layouts of the files that passed the checks, and the ones `old_files` had before
+  the fetch (changed and removed files), so their old data goes away. A dataset that has never been built writes every partition.
   """
-  ranges = [(check.time_start, check.time_end) for check in checked.checks.values() if check.ok]
-  ranges += [(file.time_start, file.time_end) for file in old_files]
-  years = {year for start, end in ranges if start and end for year in partitions_between(start, end)}
+  ranges = [(check.time_start, check.time_end, checked.layouts.get(path)) for path, check in checked.checks.items() if check.ok]
+  ranges += [(file.time_start, file.time_end, file.depth_layout) for file in old_files]
+  keys: set[PartitionKey] = {(year, layout) for start, end, layout in ranges if start and end for year in partitions_between(start, end)}
 
   if checked.strict:
     # the dataset has never been built, so write every partition that has data in the archive, even if no new file covers it
     async with context.session() as session:
-      years |= set((await session.exec(select(Partition.year).where(Partition.dataset_id == dataset_id))).all())
+      keys |= set((await session.exec(select(Partition.year, Partition.layout).where(Partition.dataset_id == dataset_id))).all())
 
-  return sorted(years)
+  return sorted(keys, key=lambda key: (key[0], key[1] or 0))
+
+
+def store_path(key: PartitionKey, job_id: int) -> str:
+  """Where a partition's store goes, relative to the dataset's `zarr_dir`: `{year}/{job_id}`, or `{year}/{layout}/{job_id}`."""
+  year, layout = key
+  return f"{year}/{job_id}" if layout is None else f"{year}/{layout}/{job_id}"
 
 
 async def write_partitions(
-  context: JobContext, dataset_id: int, feature_type: FeatureType, variables: list[Variable], years: list[int]
+  context: JobContext, dataset_id: int, feature_type: FeatureType, variables: list[Variable], keys: list[PartitionKey]
 ) -> list[WrittenPartition]:
   """
-  Writes each year to a new store, `{year}/{job_id}/` in the dataset's `zarr_dir`, from every archived file that is `new` or `ok`
-  and overlaps the year. If writing fails, the stores this job wrote are deleted and the error is raised.
+  Writes each partition to a new store, from every archived file that is `new` or `ok`, overlaps the year and
+  has the partition's depth layout. If writing fails, the stores this job wrote are deleted and the error is raised.
   Reports progress from 0 to 1.
   """
   async with context.session() as session:
-    # the files that are `new` or `ok` and have a time range, sorted by path so the last file's values are kept when a time step is in several files
-    query = select(File.path, File.time_start, File.time_end).where(
+    # the files that are `new` or `ok` and have a time range
+    query = select(File.path, File.time_start, File.time_end, File.depth_layout).where(
       File.dataset_id == dataset_id, col(File.status).in_([FileStatus.new, FileStatus.ok]), col(File.time_start).is_not(None)
     )
     files = list((await session.exec(query)).all())
 
-  if years:
-    await context.log(f"Writing {len(years)} partitions: {', '.join(map(str, years))}")
+  if keys:
+    await context.log(f"Writing {len(keys)} partitions: {', '.join(map(partition_label, keys))}")
 
   archive = raw_dir(dataset_id)
 
   written: list[WrittenPartition] = []
   targets: list[Path] = []
   try:
-    for done, year in enumerate(years, start=1):
+    for done, key in enumerate(keys, start=1):
+      year, layout = key
       start, end = partition_bounds(year)
-      paths = [archive / path for path, time_start, time_end in files if time_start < end and time_end >= start]
-      target = zarr_dir(dataset_id) / str(year) / str(context.job_id)
+      paths = [
+        archive / path for path, time_start, time_end, depth_layout in files if time_start < end and time_end >= start and depth_layout == layout
+      ]
+      target = zarr_dir(dataset_id) / store_path(key, context.job_id)
       targets.append(target)
 
       # in a thread, so the event loop stays free while the files are read and the store is written
       partition = await asyncio.to_thread(write_partition, paths, variables, feature_type, year, target)
+      partition.layout = layout
       written.append(partition)
 
       for warning in partition.warnings:
         await context.log(f"Warning: {warning}")
       if partition.rows:
-        await context.log(f"{year}: {partition.rows} time steps from {len(paths)} files")
+        await context.log(f"{partition_label(key)}: {partition.rows} time steps from {len(paths)} files")
       else:
-        await context.log(f"{year}: no data any more, the partition is removed")
-      await context.progress(done / len(years))
+        await context.log(f"{partition_label(key)}: no data any more, the partition is removed")
+      await context.progress(done / len(keys))
   except BaseException:
     # if writing fails, delete the stores this job wrote and raise the error
     for target in targets:
@@ -181,35 +202,47 @@ async def switch_partitions(context: JobContext, dataset_id: int, written: list[
   passed the checks `ok`, and, if a partition changed, recomputes the dataset's time and depth extents from its partitions and increases its
   `version`. `built_at` is set if any data was written.
   """
-  years_written, years_removed = [], []
+  years_written: set[int] = set()
+  removed_years: set[int] = set()
+  changed = False  # whether a partition was written or removed
   async with context.session() as session:
     for partition in written:
+      key = (partition.year, partition.layout)
       if not partition.rows:
-        # no data in the year any more, so remove the partition if it exists
-        removed = await session.exec(delete(Partition).where(col(Partition.dataset_id) == dataset_id, col(Partition.year) == partition.year))
-        if removed.rowcount:
-          years_removed.append(partition.year)
+        # no data in the partition any more, so remove it if it exists
+        statement = delete(Partition).where(
+          col(Partition.dataset_id) == dataset_id, col(Partition.year) == partition.year, col(Partition.layout).is_not_distinct_from(partition.layout)
+        )
+        if (await session.exec(statement)).rowcount:
+          removed_years.add(partition.year)
+          changed = True
         continue
 
+      # insert the partition, or update it if it already exists
       values = {
-        "path": f"{partition.year}/{context.job_id}",
+        "path": store_path(key, context.job_id),
         "rows": partition.rows,
         "time_start": partition.time_start,
         "time_end": partition.time_end,
         "depth_min": partition.depth_min,
         "depth_max": partition.depth_max,
       }
-      statement = insert(Partition).values(dataset_id=dataset_id, year=partition.year, **values)
-      # if the partition already exists, point it at the new store. The `dataset_id` and `year` are the unique constraint.
-      statement = statement.on_conflict_do_update(index_elements=["dataset_id", "year"], set_={**values, "updated_at": sa.func.now()})
+      statement = insert(Partition).values(dataset_id=dataset_id, year=partition.year, layout=partition.layout, **values)
+      statement = statement.on_conflict_do_update(index_elements=["dataset_id", "year", "layout"], set_={**values, "updated_at": sa.func.now()})
       await session.exec(statement)
-      years_written.append(partition.year)
+      years_written.add(partition.year)
+      changed = True
+
+    # a year is only removed when none of its partitions (one per depth layout) is left
+    if removed_years:
+      remaining = select(Partition.year).where(Partition.dataset_id == dataset_id, col(Partition.year).in_(removed_years))
+      removed_years -= set((await session.exec(remaining)).all())
 
     if passed:
       # mark the files that passed the checks `ok` and clear their error. The others stay `new` or `failed`
       await session.exec(update(File).where(col(File.dataset_id) == dataset_id, col(File.path).in_(passed)).values(status=FileStatus.ok, error=None))
 
-    if years_written or years_removed:
+    if changed:
       # the extent is recomputed from every partition, so it shrinks when data is removed, and is `null` when none is left
       extent = select(
         sa.func.min(Partition.time_start), sa.func.max(Partition.time_end), sa.func.min(Partition.depth_min), sa.func.max(Partition.depth_max)
@@ -233,7 +266,7 @@ async def switch_partitions(context: JobContext, dataset_id: int, written: list[
       version = (await session.exec(select(Dataset.version).where(Dataset.id == dataset_id))).one()
 
     await session.commit()
-  return Switched(years_written=years_written, years_removed=years_removed, version=version)
+  return Switched(years_written=sorted(years_written), years_removed=sorted(removed_years), version=version)
 
 
 def file_error(check: FileCheck) -> str:
@@ -271,9 +304,17 @@ async def _log(context: JobContext, checked: Checked) -> None:
 
 
 async def _record(context: JobContext, dataset_id: int, checked: Checked) -> None:
-  """Updates the checked files in the index, in one transaction."""
+  """
+  Updates the checked files in the index, in one transaction. A passing file with depths gets the depth layout with exactly the
+  same depths, and a new layout is added for depths that haven't been seen yet.
+  """
+  new_layouts = []
   async with context.session() as session:
+    layouts = {
+      tuple(layout.depths): layout.number for layout in (await session.exec(select(DepthLayout).where(DepthLayout.dataset_id == dataset_id))).all()
+    }
     for path, check in checked.checks.items():
+      layout = None
       if path in checked.ignored:
         values = {"status": FileStatus.ignored, "error": file_error(check)}
       elif not check.ok:
@@ -281,6 +322,39 @@ async def _record(context: JobContext, dataset_id: int, checked: Checked) -> Non
       else:
         # stays `new` until its data is written. Clears the error of a file that failed before
         values = {"status": FileStatus.new, "error": None}
-      values |= {"time_start": check.time_start, "time_end": check.time_end}
+        if check.depths is not None:
+          layout = _find_layout(layouts, check.depths)
+          if layout is None:
+            layout = max(layouts.values(), default=0) + 1
+            layouts[check.depths] = layout
+            session.add(DepthLayout(dataset_id=dataset_id, number=layout, depths=list(check.depths)))
+            new_layouts.append((layout, check.depths, path))
+
+        checked.layouts[path] = layout
+      values |= {"time_start": check.time_start, "time_end": check.time_end, "depth_layout": layout}
       await session.exec(update(File).where(col(File.dataset_id) == dataset_id, col(File.path) == path).values(**values))
     await session.commit()
+
+  for number, depths, path in new_layouts:
+    await context.log(f"New depth layout {number}: {_describe_depths(depths)}, first in {path}")
+
+
+def _find_layout(layouts: dict[tuple[float, ...], int], depths: tuple[float, ...]) -> int | None:
+  """The number of the layout with exactly these depths (NaN equal to NaN), or `None`."""
+  if depths in layouts:
+    # the depths are exactly the same as a known layout,
+    return layouts[depths]
+
+  for known, number in layouts.items():
+    if len(known) == len(depths) and np.array_equal(
+      known, depths, equal_nan=True
+    ):  # the depths are the same as a known layout, but with NaN in different places
+      return number
+  return None
+
+
+def _describe_depths(depths: tuple[float, ...]) -> str:
+  values = np.asarray(depths)
+  if not np.isfinite(values).any():
+    return f"{len(depths)} depths"
+  return f"{len(depths)} depths from {np.nanmin(values):g} to {np.nanmax(values):g}"

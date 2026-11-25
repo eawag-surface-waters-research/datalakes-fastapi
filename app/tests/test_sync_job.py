@@ -10,7 +10,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.enums import FeatureType, FileStatus, JobStatus, JobType, VariableRole
-from app.models import Dataset, Job, Partition, Variable
+from app.models import Dataset, DepthLayout, Job, Partition, Variable
 from app.tests.test_fetch import Bucket, add_dataset, fetch, index, result
 
 
@@ -456,7 +456,7 @@ async def test_sync_without_feature_type_fails(worker_engine, make_worker, bucke
   await add_variables(worker_engine, dataset_id)
   job = await sync(worker_engine, make_worker, dataset_id)
   assert job.status == JobStatus.failed
-  assert job.error == f"Dataset {dataset_id} has no feature_type. Set it, e.g. to the one inspect suggests, then sync again"
+  assert job.error == f"Dataset {dataset_id} has no feature_type"
   assert set(await index(worker_engine, dataset_id)) == {"a.nc"}  # the fetch ran
   assert "Checking" not in job.log
 
@@ -468,3 +468,152 @@ async def test_sync_of_a_profile_dataset_fails(worker_engine, make_worker, bucke
   job = await sync(worker_engine, make_worker, dataset_id)
   assert job.status == JobStatus.failed
   assert job.error == "profile datasets can't be built yet"
+
+
+# depth layouts of a timeSeriesProfile
+
+
+def chain_netcdf(tmp_path: Path, start: int, depths: list[float], steps: int = 2) -> bytes:
+  """A thermistor chain file with a value every 10 minutes at the given depths."""
+  ds = xr.Dataset(
+    {"temp": (("time", "depth"), np.full((steps, len(depths)), 5.0), {"units": "degC"})},
+    coords={
+      "time": ("time", start + 600 * np.arange(steps, dtype="float64"), {"units": UNIX_UNITS}),
+      "depth": ("depth", np.array(depths), {"units": "m"}),
+    },
+  )
+  path = tmp_path / f"chain-{start}-{len(depths)}-{steps}.nc"
+  ds.to_netcdf(path)
+  return path.read_bytes()
+
+
+async def add_chain(engine: AsyncEngine, bucket) -> int:
+  dataset_id = await add_dataset(engine, bucket, feature_type=FeatureType.time_series_profile)
+  async with AsyncSession(engine) as session:
+    session.add(Variable(dataset_id=dataset_id, name="time", source_name="time", role=VariableRole.time, dimensions=["time"]))
+    session.add(Variable(dataset_id=dataset_id, name="depth", source_name="depth", role=VariableRole.coordinate, dimensions=["depth"], unit="m"))
+    session.add(
+      Variable(dataset_id=dataset_id, name="temperature", source_name="temp", role=VariableRole.data, dimensions=["time", "depth"], unit="degC")
+    )
+    await session.commit()
+  return dataset_id
+
+
+async def layouts(engine: AsyncEngine, dataset_id: int) -> dict[int, list[float]]:
+  async with AsyncSession(engine) as session:
+    return {layout.number: layout.depths for layout in (await session.exec(select(DepthLayout).where(DepthLayout.dataset_id == dataset_id))).all()}
+
+
+FIRST = [0.25, 0.5, 1.0]  # the depths of a first deployment
+SECOND = [0.25, 1.0, 2.0, 3.0]  # a redeployment with the sensors moved and one added
+
+
+async def test_redeployment_within_a_year_gets_a_second_layout(worker_engine, make_worker, bucket, filesystem, tmp_path):
+  bucket.put("a.nc", chain_netcdf(tmp_path, START, FIRST))
+  bucket.put("b.nc", chain_netcdf(tmp_path, START + 86_400, SECOND))
+  dataset_id = await add_chain(worker_engine, bucket)
+
+  job = await sync(worker_engine, make_worker, dataset_id)
+  assert job.status == JobStatus.succeeded, job.error
+  assert "New depth layout 1: 3 depths from 0.25 to 1, first in a.nc" in job.log
+  assert "New depth layout 2: 4 depths from 0.25 to 3, first in b.nc" in job.log
+  assert "Writing 2 partitions: 2023 (depth layout 1), 2023 (depth layout 2)" in job.log
+  assert job.result is not None and job.result["years_written"] == [2023]
+  assert await layouts(worker_engine, dataset_id) == {1: FIRST, 2: SECOND}
+  assert {path: file.depth_layout for path, file in (await index(worker_engine, dataset_id)).items()} == {"a.nc": 1, "b.nc": 2}
+
+  async with AsyncSession(worker_engine) as session:
+    rows = (await session.exec(select(Partition).where(Partition.dataset_id == dataset_id))).all()
+  found = {(p.year, p.layout): p for p in rows}
+  assert {key: p.path for key, p in found.items()} == {(2023, 1): f"2023/1/{job.id}", (2023, 2): f"2023/2/{job.id}"}
+  assert read_partition(filesystem, dataset_id, found[(2023, 2)])["depth"].values.tolist() == SECOND
+  dataset = await get_dataset(worker_engine, dataset_id)
+  assert (dataset.depth_min, dataset.depth_max) == (0.25, 3.0)
+
+
+async def test_depths_that_come_back_get_their_old_layout(worker_engine, make_worker, bucket, filesystem, tmp_path):
+  bucket.put("a.nc", chain_netcdf(tmp_path, START, FIRST))
+  bucket.put("b.nc", chain_netcdf(tmp_path, START + 86_400, SECOND))
+  dataset_id = await add_chain(worker_engine, bucket)
+  assert (await sync(worker_engine, make_worker, dataset_id)).status == JobStatus.succeeded
+
+  bucket.put("c.nc", chain_netcdf(tmp_path, START + 2 * 86_400, FIRST))  # the first deployment's depths again
+  job = await sync(worker_engine, make_worker, dataset_id)
+  assert job.status == JobStatus.succeeded, job.error
+  assert "New depth layout" not in job.log
+  assert "Writing 1 partitions: 2023 (depth layout 1)" in job.log  # layout 2 isn't touched
+  assert (await index(worker_engine, dataset_id))["c.nc"].depth_layout == 1
+  assert set(await layouts(worker_engine, dataset_id)) == {1, 2}
+
+
+async def test_changed_file_moving_to_another_layout(worker_engine, make_worker, bucket, filesystem, tmp_path):
+  bucket.put("a.nc", chain_netcdf(tmp_path, START, FIRST))
+  bucket.put("b.nc", chain_netcdf(tmp_path, START + 86_400, FIRST))
+  dataset_id = await add_chain(worker_engine, bucket)
+  assert (await sync(worker_engine, make_worker, dataset_id)).status == JobStatus.succeeded
+
+  bucket.put("b.nc", chain_netcdf(tmp_path, START + 86_400, SECOND))  # reprocessed with the new depths
+  job = await sync(worker_engine, make_worker, dataset_id)
+  assert job.status == JobStatus.succeeded, job.error
+  assert "Writing 2 partitions: 2023 (depth layout 1), 2023 (depth layout 2)" in job.log  # the old layout, without b.nc
+  async with AsyncSession(worker_engine) as session:
+    rows = (await session.exec(select(Partition).where(Partition.dataset_id == dataset_id))).all()
+  assert {(p.layout, p.rows) for p in rows} == {(1, 2), (2, 2)}
+  assert job.result is not None and (job.result["years_written"], job.result["years_removed"]) == ([2023], [])
+
+
+async def test_a_layout_without_data_is_removed_but_its_year_stays(worker_engine, make_worker, bucket, filesystem, tmp_path):
+  bucket.put("a.nc", chain_netcdf(tmp_path, START, FIRST))
+  bucket.put("b.nc", chain_netcdf(tmp_path, START + 86_400, SECOND))
+  dataset_id = await add_chain(worker_engine, bucket)
+  assert (await sync(worker_engine, make_worker, dataset_id)).status == JobStatus.succeeded
+
+  bucket.remove("a.nc")
+  job = await sync(worker_engine, make_worker, dataset_id)
+  assert job.status == JobStatus.succeeded, job.error
+  assert "2023 (depth layout 1): no data any more, the partition is removed" in job.log
+  assert job.result is not None and (job.result["years_written"], job.result["years_removed"]) == ([], [])  # 2023 still has layout 2
+  async with AsyncSession(worker_engine) as session:
+    rows = (await session.exec(select(Partition).where(Partition.dataset_id == dataset_id))).all()
+  assert [(p.year, p.layout) for p in rows] == [(2023, 2)]
+  dataset = await get_dataset(worker_engine, dataset_id)
+  assert (dataset.version, dataset.depth_min, dataset.depth_max) == (3, 0.25, 3.0)
+
+
+async def test_rechecking_a_new_dataset_keeps_the_layout_numbers(worker_engine, make_worker, bucket, filesystem, tmp_path):
+  bucket.put("a.nc", chain_netcdf(tmp_path, START, FIRST))
+  bucket.put("b.nc", chain_netcdf(tmp_path, START + 86_400, SECOND))
+  bucket.put("notes.txt", "not data")  # fails the strict first build
+  dataset_id = await add_chain(worker_engine, bucket)
+  assert (await sync(worker_engine, make_worker, dataset_id)).status == JobStatus.failed
+  assert await layouts(worker_engine, dataset_id) == {1: FIRST, 2: SECOND}
+
+  bucket.remove("notes.txt")
+  job = await sync(worker_engine, make_worker, dataset_id)
+  assert job.status == JobStatus.succeeded, job.error
+  assert "New depth layout" not in job.log
+  assert {path: file.depth_layout for path, file in (await index(worker_engine, dataset_id)).items()} == {"a.nc": 1, "b.nc": 2}
+
+
+async def test_time_series_files_have_no_layout(worker_engine, make_worker, bucket, filesystem, tmp_path):
+  bucket.put("a.nc", netcdf(tmp_path))
+  dataset_id = await add_dataset(worker_engine, bucket)
+  await add_variables(worker_engine, dataset_id)
+  job = await sync(worker_engine, make_worker, dataset_id)
+  assert job.status == JobStatus.succeeded, job.error
+  assert (await index(worker_engine, dataset_id))["a.nc"].depth_layout is None
+  assert await layouts(worker_engine, dataset_id) == {}
+  assert (await partitions(worker_engine, dataset_id))[2023].layout is None
+
+
+async def test_profile_without_a_depth_variable_fails_before_the_checks(worker_engine, make_worker, bucket, filesystem, tmp_path):
+  bucket.put("a.nc", netcdf(tmp_path))
+  dataset_id = await add_dataset(worker_engine, bucket, feature_type=FeatureType.time_series_profile)
+  await add_variables(worker_engine, dataset_id)
+  job = await sync(worker_engine, make_worker, dataset_id)
+  assert job.status == JobStatus.failed
+  assert job.error == (
+    f"Dataset {dataset_id}'s variables don't fit a timeSeriesProfile: a timeSeriesProfile needs exactly one coordinate variable "
+    "on its depth dimension, e.g. depth(depth), the dataset has 0"
+  )
+  assert "Checking" not in job.log

@@ -227,9 +227,7 @@ def test_profile_renames_the_dimensions(tmp_path):
 def test_profile_files_with_different_depths_fail(tmp_path):
   a = profile_netcdf(tmp_path / "a.nc", [NEW_YEAR_2024], [1.0, 5.0], [[1.0, 2.0]])
   b = profile_netcdf(tmp_path / "b.nc", [NEW_YEAR_2024 + 600], [1.0, 5.0, 10.0], [[1.0, 2.0, 3.0]])
-  message = (
-    r"2024: b.nc has the depths \[1, 5, 10\] \(3 values\), a.nc has \[1, 5\] \(2 values\). Files with different depths can't be in the same year yet"
-  )
+  message = r"2024: b.nc has the depths \[1, 5, 10\] \(3 values\), a.nc has \[1, 5\] \(2 values\). Files with different depths belong to different depth layouts and can't share a store"
   with pytest.raises(PartitionError, match=message):
     write_partition([a, b], PROFILE_VARIABLES, TSP, 2024, tmp_path / "2024")
   assert not (tmp_path / "2024").exists()

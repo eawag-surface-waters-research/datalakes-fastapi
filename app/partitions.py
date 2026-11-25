@@ -6,8 +6,8 @@ A partition holds one calendar year (UTC) of the dataset's data.
 A partition's store has one array per variable (= one chunk), named after the dataset's variable:
 - `timeSeries`: every variable is on one time dimension, named after the dataset's time variable.
 - `timeSeriesProfile`: variables are on time or on time and depth. The depth dimension is named after the dataset's
-  depth variable: the one coordinate variable on a dimension other than time. Every file in a partition must
-  have the same depth values.
+  depth variable: the one coordinate variable on a dimension other than time. Every file in a partition must have the same
+  depth values: the caller writes one partition per year and depth layout.
 Missing values are NaN: `_FillValue`, `missing_value` and the variable's `decoding` are applied.
 """
 
@@ -44,6 +44,7 @@ class WrittenPartition:
   depth_min: float | None = None  # the range of the depth axis, for a `timeSeriesProfile`. `None` for a `timeSeries`
   depth_max: float | None = None
   warnings: list[str] = field(default_factory=list)
+  layout: int | None = None  # the depth layout it's for, `None` for a `timeSeries`
 
 
 def partition_of(time: datetime) -> int:
@@ -70,7 +71,7 @@ def write_partition(
   sorts last by path. The files must have passed `check_file`.
   """
   time_name = _time_variable(variables).name
-  depth_variable = _depth_variable(variables, feature_type)
+  depth_var = depth_variable(variables, feature_type)
   start, end = (np.datetime64(bound.replace(tzinfo=None), "ns") for bound in partition_bounds(year))
 
   parts: list[tuple[Path, xr.Dataset]] = []
@@ -85,8 +86,8 @@ def write_partition(
     # no file has data in the year, so no store is written
     return WrittenPartition(year=year, rows=0)
 
-  if depth_variable is not None:
-    _check_same_depths([(path, ds[depth_variable.name].values) for path, ds in parts], year)
+  if depth_var is not None:
+    _check_same_depths([(path, ds[depth_var.name].values) for path, ds in parts], year)
 
   datasets = [ds for _, ds in parts]
   # the depth axis is the same in every part (checked above), so it's taken from the first
@@ -109,8 +110,8 @@ def write_partition(
 
   times = combined[time_name].values
   written = WrittenPartition(year=year, rows=rows, time_start=utc_datetime(times[0]), time_end=utc_datetime(times[-1]), warnings=warnings)
-  if depth_variable is not None:
-    depths = combined[depth_variable.name].values
+  if depth_var is not None:
+    depths = combined[depth_var.name].values
     if np.isfinite(depths).any():
       written.depth_min, written.depth_max = float(np.nanmin(depths)), float(np.nanmax(depths))
   return written
@@ -127,7 +128,7 @@ def read_file(path: Path, variables: Sequence[VariableCommon], feature_type: Fea
     raise PartitionError(f"{feature_type} datasets can't be written yet")
 
   time_variable = _time_variable(variables)
-  depth_variable = _depth_variable(variables, feature_type)
+  depth_var = depth_variable(variables, feature_type)
 
   with xr.open_dataset(path, decode_times=False, decode_timedelta=False, mask_and_scale=True) as ds:
     time = ds.variables[time_variable.source_name]
@@ -136,24 +137,24 @@ def read_file(path: Path, variables: Sequence[VariableCommon], feature_type: Fea
     time_dim = time.dims[0]
 
     depth_dim = None
-    if depth_variable is not None:
-      depth = ds.variables[depth_variable.source_name]
+    if depth_var is not None:
+      depth = ds.variables[depth_var.source_name]
       if depth.ndim != 1 or depth.dims[0] == time_dim:
         raise PartitionError(
-          f"{path.name}: depth variable '{depth_variable.source_name}' has dimensions ({_dims(depth)}), a {feature_type} needs one other than time"
+          f"{path.name}: depth variable '{depth_var.source_name}' has dimensions ({_dims(depth)}), a {feature_type} needs one other than time"
         )
       depth_dim = depth.dims[0]
 
     # a variable's dimensions in the file, and what they're called in the store
     names = {time_dim: time_variable.name}
     allowed = [(time_dim,)]
-    if depth_variable is not None:
-      names[depth_dim] = depth_variable.name
+    if depth_var is not None:
+      names[depth_dim] = depth_var.name
       allowed += [(time_dim, depth_dim), (depth_dim, time_dim)]
 
     data: dict[str, tuple[tuple, np.ndarray, dict[str, Any]]] = {}  # variable name -> (dims, values, attrs)
     for variable in variables:
-      if variable is time_variable or variable is depth_variable:
+      if variable is time_variable or variable is depth_var:
         continue
 
       var = ds.variables[variable.source_name]
@@ -168,9 +169,9 @@ def read_file(path: Path, variables: Sequence[VariableCommon], feature_type: Fea
 
     times = _decode_times(time)
     coords = {time_variable.name: ((time_variable.name,), times, _attrs(time_variable, unit=False))}
-    if depth_variable is not None:
-      depths = _apply_decoding(np.asarray(ds.variables[depth_variable.source_name].values), depth_variable.decoding)
-      coords[depth_variable.name] = ((depth_variable.name,), depths, _attrs(depth_variable))
+    if depth_var is not None:
+      depths = _apply_decoding(np.asarray(ds.variables[depth_var.source_name].values), depth_var.decoding)
+      coords[depth_var.name] = ((depth_var.name,), depths, _attrs(depth_var))
 
     out = xr.Dataset(data, coords=coords)
     return out.isel({time_variable.name: ~np.isnat(times)})  # leave out the time steps that have no time after decoding
@@ -183,7 +184,7 @@ def _time_variable(variables: Sequence[VariableCommon]) -> VariableCommon:
   return times[0]
 
 
-def _depth_variable(variables: Sequence[VariableCommon], feature_type: FeatureType) -> VariableCommon | None:
+def depth_variable(variables: Sequence[VariableCommon], feature_type: FeatureType) -> VariableCommon | None:
   """
   The depth variable of a `timeSeriesProfile`: the one coordinate variable on a single dimension other than time's`.
   `None` for a `timeSeries`.
@@ -213,7 +214,7 @@ def _check_same_depths(depths: list[tuple[Path, np.ndarray]], year: int) -> None
     if not np.array_equal(values, first, equal_nan=True):
       raise PartitionError(
         f"{year}: {path.name} has the depths {_format_depths(values)}, {first_path.name} has {_format_depths(first)}. "
-        "Files with different depths can't be in the same year yet"
+        "Files with different depths belong to different depth layouts and can't share a store"
       )
 
 

@@ -58,6 +58,7 @@ class FileCheck:
   warnings: list[str] = field(default_factory=list)
   time_start: datetime | None = None  # the time the file covers, from its time variable. `None` if it can't be decoded
   time_end: datetime | None = None
+  depths: tuple[float, ...] | None = None  # the values of the depth variable, if one was given and it's 1-D. Decides the depth layout
 
   @property
   def ok(self) -> bool:
@@ -69,9 +70,10 @@ class FileCheck:
     return any(problem.code == ProblemCode.unsupported_format for problem in self.problems)
 
 
-def check_file(path: Path, variables: Sequence[VariableCommon]) -> FileCheck:
+def check_file(path: Path, variables: Sequence[VariableCommon], depth_variable: VariableCommon | None = None) -> FileCheck:
   """
-  Checks the file at `path` against the dataset's variables
+  Checks the file at `path` against the dataset's variables. With a `depth_variable` (a `timeSeriesProfile`'s), its values are
+  recorded in `depths`, as they decide which depth layout the file belongs to.
   """
   check = FileCheck()
 
@@ -107,6 +109,8 @@ def check_file(path: Path, variables: Sequence[VariableCommon]) -> FileCheck:
         continue
 
       _check_dimensions(path.name, variable, var, check)
+      if variable is depth_variable and var.ndim == 1:
+        check.depths = tuple(float(value) for value in np.asarray(var.values, dtype="float64"))
       if variable.role == VariableRole.time:
         _check_time(path.name, variable, var, check)
       elif variable.unit is not None:

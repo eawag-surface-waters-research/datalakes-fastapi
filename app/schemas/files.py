@@ -28,8 +28,9 @@ class FileRead(SQLModel):
   time_end: datetime | None = Field(description="Time of the file's last value. `null` until the file is processed.")
   depth_layout: int | None = Field(
     ge=1,
-    description="For datasets with a depth, the depth layout the file belongs to (1, 2, …). A new layout starts when a file's depth axis "
-    "differs from the previous file's, e.g. when a thermistor chain gets more sensors. `null` until the file is processed, and for datasets without a depth.",
+    description="For datasets with a depth, the depth layout the file belongs to (1, 2, …). Files with exactly the same depths share a "
+    "layout, and a new one starts when a file has depths not seen before, e.g. when a thermistor chain is redeployed with its sensors "
+    "moved. Depths that come back get their old layout. `null` until the file is processed, and for datasets without a depth.",
   )
   status: FileStatus = Field(
     description="- `new`: copied from the source (new or changed there), not processed yet.\n"
