@@ -2,7 +2,15 @@ from pydantic import Field
 
 from app.enums import JobType
 from app.partitions import SUPPORTED_FEATURE_TYPES, PartitionError, depth_variable
-from app.worker.build import FailedFile, affected_partitions, check_files, load_variables, switch_partitions, write_partitions
+from app.worker.build import (
+  FailedFile,
+  affected_partitions,
+  check_files,
+  check_layouts_dont_overlap,
+  load_variables,
+  switch_partitions,
+  write_partitions,
+)
 from app.worker.context import JobContext, JobError
 from app.worker.handlers.base import Handler, NoParams
 from app.worker.handlers.fetch import FetchHandler, FetchResult
@@ -72,6 +80,10 @@ class SyncHandler(Handler[NoParams]):
     )
     if checked.strict and checked.failed:
       raise JobError(checked.error(), result=result)
+    try:
+      await check_layouts_dont_overlap(context, context.dataset_id)
+    except JobError as error:
+      raise JobError(str(error), result=result) from None
 
     # 4. Find the affected Zarr partitions (year, and depth layout for a timeSeriesProfile): those of each new file, the old and new ones of a changed file, and the old ones of a removed file
     keys = await affected_partitions(context, context.dataset_id, checked, [*fetched.changed, *fetched.removed])

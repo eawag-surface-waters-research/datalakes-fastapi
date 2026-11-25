@@ -25,37 +25,101 @@ async def in_read_pool[T](fn: Callable[..., T], *args) -> T:
 
 
 @dataclass
-class TimeSeriesData:
+class Data:
   times: np.ndarray  # datetime64[ns] in UTC, sorted
-  values: dict[str, np.ndarray]  # variable name -> its values on the time axis, NaN where missing
+  depths: np.ndarray | None  # the depths that occur in the stores and the depth range, sorted. `None` for a dataset without depth
+  values: dict[str, np.ndarray]  # variable name -> its values on (time,) or (time, depth), NaN where missing
 
 
-def read_time_series(stores: Sequence[Path], time_name: str, names: Sequence[str], start: datetime | None, end: datetime | None) -> TimeSeriesData:
+@dataclass
+class _Part:
+  """What one store has in the requested time range."""
+
+  times: np.ndarray
+  depths: np.ndarray | None
+  values: dict[str, np.ndarray]
+
+
+def read_data(
+  stores: Sequence[Path],
+  time_name: str,
+  names: dict[str, bool],
+  start: datetime | None,
+  end: datetime | None,
+  depth_name: str | None = None,
+  depth_min: float | None = None,
+  depth_max: float | None = None,
+) -> Data:
   """
-  Reads the variables `names` of a `timeSeries` dataset from `stores`, between `start` and `end`, both included. `None` means no limit.
+  Reads the variables `names` (name -> whether it has the depth dimension) from `stores`, between `start` and `end`, both included.
+  `None` means no limit.
+
+  For a dataset with depth, `depth_name` is its depth coordinate. Stores with different depths (one per depth layout) are joined on all
+  the depths they have, and a value is NaN where a store has no such depth. Only the depths between `depth_min` and `depth_max`, both
+  included, are returned.
   """
   lower, upper = _datetime64(start), _datetime64(end)
-  times: list[np.ndarray] = []
-  values: dict[str, list[np.ndarray]] = {name: [] for name in names}
-
+  parts: list[_Part] = []
   for store in stores:
     with xr.open_zarr(store, consolidated=False, chunks=None) as ds:
       # the time steps of a store are sorted and unique, so the requested ones are one slice
       store_times = ds[time_name].values
       first = 0 if lower is None else int(np.searchsorted(store_times, lower, side="left"))  # the first time step that is >= lower
       last = len(store_times) if upper is None else int(np.searchsorted(store_times, upper, side="right"))  # the first time step that is > upper
-      times.append(store_times[first:last])
+      if first == last:
+        continue
 
-      for name in names:
+      depths = None if depth_name is None else ds[depth_name].values
+      values = {}
+      for name, has_depth in names.items():
         if name in ds:
-          values[name].append(ds[name].isel({time_name: slice(first, last)}).values)  # the variable is present in this store, so read its values
+          values[name] = ds[name].isel({time_name: slice(first, last)}).values
         else:
-          values[name].append(np.full(last - first, np.nan))  # the variable is missing in this store, so fill with NaN
+          # the variable is missing in this store, so fill with NaN
+          values[name] = np.full((last - first, len(depths)) if has_depth and depths is not None else last - first, np.nan)
+      parts.append(_Part(times=store_times[first:last], depths=depths, values=values))
 
-  return TimeSeriesData(
-    times=np.concatenate(times) if times else np.array([], dtype="datetime64[ns]"),
-    values={name: np.concatenate(parts) if parts else np.array([], dtype="float64") for name, parts in values.items()},
-  )
+  depths = None
+  if depth_name is not None:
+    depths = _depth_axis([part.depths for part in parts if part.depths is not None], depth_min, depth_max)
+    parts = [_on_depths(part, depths) for part in parts]
+
+  times = np.concatenate([part.times for part in parts]) if parts else np.array([], dtype="datetime64[ns]")
+  values = {}
+  for name, has_depth in names.items():
+    empty = np.empty((0, len(depths)) if has_depth and depths is not None else 0)
+    values[name] = np.concatenate([part.values[name] for part in parts]) if parts else empty
+
+  return Data(times=times, depths=depths, values=values)
+
+
+def _depth_axis(store_depths: list[np.ndarray], depth_min: float | None, depth_max: float | None) -> np.ndarray:
+  """All depths of the stores, sorted, within the depth range."""
+  depths = np.unique(np.concatenate(store_depths)) if store_depths else np.array([], dtype="float64")
+  depths = depths[np.isfinite(depths)]
+  if depth_min is not None:
+    depths = depths[depths >= depth_min]
+  if depth_max is not None:
+    depths = depths[depths <= depth_max]
+  return depths
+
+
+def _on_depths(part: _Part, depths: np.ndarray) -> _Part:
+  """The part with its variables on `depths`, NaN at the depths the store doesn't have."""
+  assert part.depths is not None
+  # where each of the store's depths is on the axis, and which of them are on it at all (not filtered out)
+  position = np.searchsorted(depths, part.depths).clip(max=max(len(depths) - 1, 0))
+  on_axis = (position < len(depths)) & (depths[position] == part.depths) if len(depths) else np.zeros(len(part.depths), dtype=bool)
+
+  values = {}
+  for name, array in part.values.items():
+    if array.ndim == 2:
+      joined = np.full((array.shape[0], len(depths)), np.nan, dtype=np.result_type(array.dtype, np.float64))
+      joined[:, position[on_axis]] = array[:, on_axis]
+      values[name] = joined
+    else:
+      values[name] = array
+  return _Part(times=part.times, depths=depths, values=values)
 
 
 def _datetime64(value: datetime | None) -> np.datetime64 | None:

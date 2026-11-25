@@ -617,3 +617,17 @@ async def test_profile_without_a_depth_variable_fails_before_the_checks(worker_e
     "on its depth dimension, e.g. depth(depth), the dataset has 0"
   )
   assert "Checking" not in job.log
+
+
+async def test_layouts_that_overlap_in_time_fail_the_build(worker_engine, make_worker, bucket, filesystem, tmp_path):
+  bucket.put("a.nc", chain_netcdf(tmp_path, START, FIRST, steps=6))
+  bucket.put("b.nc", chain_netcdf(tmp_path, START + 1800, SECOND))  # starts at a.nc's 4th time step
+  dataset_id = await add_chain(worker_engine, bucket)
+
+  job = await sync(worker_engine, make_worker, dataset_id)
+  assert job.status == JobStatus.failed
+  assert job.error == (
+    "Nothing was written: a.nc (depth layout 1) and b.nc (depth layout 2) have different depths but both cover "
+    "2023-11-14T22:43:20+00:00 to 2023-11-14T22:53:20+00:00. Fix the files so that only one depth layout covers each time."
+  )
+  assert await partitions(worker_engine, dataset_id) == {}

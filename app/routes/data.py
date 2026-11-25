@@ -14,13 +14,41 @@ from app.errors import ApiError, ErrorResponse, not_found
 from app.models import Dataset, Parameter, Partition, Variable
 from app.openapi import PUBLIC_TAG
 from app.params import parse_time_range
-from app.reading import in_read_pool, read_time_series
+from app.partitions import depth_variable
+from app.reading import in_read_pool, read_data
 from app.schemas.data import DataResponse
 from app.storage import zarr_dir
 
 router = APIRouter(tags=["Data"])
 
-SUPPORTED_FEATURE_TYPES = [FeatureType.time_series]
+SUPPORTED_FEATURE_TYPES = [FeatureType.time_series, FeatureType.time_series_profile]
+
+TIME_SERIES_PROFILE_EXAMPLE = {
+  "dataset_id": 123,
+  "version": 14,
+  "feature_type": "timeSeriesProfile",
+  "query": {
+    "variables": ["temperature"],
+    "start": "2024-03-01T00:00:00Z",
+    "end": "2024-03-01T00:10:00Z",
+    "depth_min": 0,
+    "depth_max": 1.5,
+    "mask": False,
+  },
+  "coordinates": {
+    "time": {"unit": "UTC", "dimensions": ["time"], "values": ["2024-03-01T00:00:00.000Z", "2024-03-01T00:10:00.000Z"]},
+    "depth": {"unit": "m", "dimensions": ["depth"], "values": [0.5, 1.0, 1.5]},
+  },
+  "variables": {
+    "temperature": {
+      "parameter": "Water temperature",
+      "unit": "degC",
+      "dimensions": ["time", "depth"],
+      "flag_for": None,
+      "values": [[6.1, 6.0, 5.9], [6.1, 6.0, None]],
+    },
+  },
+}
 
 TIME_SERIES_EXAMPLE = {
   "dataset_id": 124,
@@ -66,6 +94,14 @@ DataEnd = Annotated[
     examples=["2024-03-31", "2024-03-31T23:59:59Z"],
   ),
 ]
+DepthMin = Annotated[
+  float | None,
+  Query(ge=0, description="Shallowest depth to return, in metres, inclusive. Only for datasets with depth.", examples=[0]),
+]
+DepthMax = Annotated[
+  float | None,
+  Query(ge=0, description="Deepest depth to return, in metres, inclusive. Only for datasets with depth.", examples=[10]),
+]
 IfNoneMatch = Annotated[
   str | None,
   Header(
@@ -82,15 +118,23 @@ IfNoneMatch = Annotated[
   responses={
     200: {
       "description": "The data. The dataset's version is also in the `ETag` header.",
-      "content": {"application/json": {"example": TIME_SERIES_EXAMPLE}},
+      "content": {
+        "application/json": {
+          "examples": {
+            "timeSeries": {"summary": "A weather station (timeSeries)", "value": TIME_SERIES_EXAMPLE},
+            "timeSeriesProfile": {"summary": "A thermistor chain (timeSeriesProfile), 0–1.5 m", "value": TIME_SERIES_PROFILE_EXAMPLE},
+          }
+        }
+      },
     },
     304: {"description": "The dataset hasn't changed since the `ETag` sent in `If-None-Match`. No body."},
     400: {
       "model": ErrorResponse,
-      "description": "The request makes no sense for this dataset, e.g. `start` is after `end` or a variable it doesn't have.",
+      "description": "The request makes no sense for this dataset, e.g. `start` is after `end`, a variable it doesn't have, "
+      "or a depth range for a dataset without depth.",
     },
     404: {"model": ErrorResponse, "description": "The dataset doesn't exist, has no data yet, or is a link dataset."},
-    501: {"model": ErrorResponse, "description": "The dataset's feature type can't be read yet: only `timeSeries` for now."},
+    501: {"model": ErrorResponse, "description": "`profile` datasets can't be read yet."},
   },
 )
 async def get_data(
@@ -99,13 +143,19 @@ async def get_data(
   variables: Variables = None,
   start: DataStart = None,
   end: DataEnd = None,
+  depth_min: DepthMin = None,
+  depth_max: DepthMax = None,
   if_none_match: IfNoneMatch = None,
 ):
   """
-  Returns a dataset's values for a time range and a set of variables. The dataset's `version` is in the body and in the `ETag` header.
+  Returns a dataset's values for a time range, a depth range and a set of variables. The dataset's `version` is in the body and in the
+  `ETag` header.
 
   - `timeSeries`: variables have the dimension `time`.
-  - `timeSeriesProfile` and `profile` datasets can't be read yet (501).
+  - `timeSeriesProfile`: variables have the dimensions `time` and `depth`, or only `time` (e.g. a surface temperature). If the depths
+    changed during the period (a thermistor chain with more sensors, say), `depth` holds all the depths that occur, and a value is `null`
+    where that depth had no sensor at that time.
+  - `profile` datasets can't be read yet (501).
 
   A time range without data returns empty arrays. Missing values are `null`.
 
@@ -124,12 +174,15 @@ async def get_data(
   if dataset.time_start is None or dataset.time_end is None:
     raise ApiError(404, "no_data", f"Dataset {dataset_id} has no data yet. Sync it first.")
   if dataset.feature_type not in SUPPORTED_FEATURE_TYPES:
-    raise ApiError(501, "not_implemented", f"Data of {dataset.feature_type} datasets can't be read yet, only of timeSeries datasets")
+    raise ApiError(501, "not_implemented", f"Data of {dataset.feature_type} datasets can't be read yet")
 
   start_time, end_time = parse_time_range(start, end)
   dataset_variables = list((await session.exec(select(Variable).where(Variable.dataset_id == dataset_id).order_by(col(Variable.id)))).all())
   time_variable = next(variable for variable in dataset_variables if variable.role == VariableRole.time)
-  selected = select_variables(dataset_id, [variable for variable in dataset_variables if variable is not time_variable], variables)
+  depth = depth_variable(dataset_variables, dataset.feature_type)
+  check_depth_range(dataset_id, depth, depth_min, depth_max)
+  coordinates = [variable for variable in (time_variable, depth) if variable is not None]
+  selected = select_variables(dataset_id, [variable for variable in dataset_variables if variable not in coordinates], variables)
 
   etag = f'"{dataset_id}-v{dataset.version}"'
   if etag_matches(if_none_match, etag):
@@ -153,20 +206,40 @@ async def get_data(
       "variables": [variable.name for variable in selected],
       "start": iso_time(answered_start),
       "end": iso_time(answered_end),
-      "depth_min": None,
-      "depth_max": None,
+      "depth_min": depth_min,
+      "depth_max": depth_max,
       "mask": False,
     },
     "coordinates": {time_variable.name: {"unit": "UTC", "dimensions": [time_variable.name], "values": []}},
     "variables": {
-      variable.name: {"parameter": parameter, "unit": variable.unit, "dimensions": [time_variable.name], "flag_for": variable.flag_for, "values": []}
+      variable.name: {
+        "parameter": parameter,
+        "unit": variable.unit,
+        "dimensions": [time_variable.name, depth.name] if has_depth(variable, depth) else [time_variable.name],
+        "flag_for": variable.flag_for,
+        "values": [],
+      }
       for variable, parameter in zip(selected, parameters, strict=True)
     },
   }
+  if depth is not None:
+    body["coordinates"][depth.name] = {"unit": depth.unit, "dimensions": [depth.name], "values": []}
 
   # reading and writing the JSON both take long for large responses, so both run in the read pool
-  content = await in_read_pool(read_json, body, stores, time_variable.name, start_time, end_time)
+  names = {variable.name: has_depth(variable, depth) for variable in selected}
+  content = await in_read_pool(read_json, body, stores, time_variable.name, names, start_time, end_time, depth, depth_min, depth_max)
   return Response(content=content, media_type="application/json", headers={"ETag": etag})
+
+
+def has_depth(variable: Variable, depth: Variable | None) -> bool:
+  return depth is not None and depth.name in variable.dimensions
+
+
+def check_depth_range(dataset_id: int, depth: Variable | None, depth_min: float | None, depth_max: float | None) -> None:
+  if depth is None and (depth_min is not None or depth_max is not None):
+    raise ApiError(400, "no_depth", f"Dataset {dataset_id} has no depth coordinate, so depth_min and depth_max can't be used")
+  if depth_min is not None and depth_max is not None and depth_min > depth_max:
+    raise ApiError(400, "invalid_depth_range", f"depth_min ({depth_min:g}) is deeper than depth_max ({depth_max:g})")
 
 
 def select_variables(dataset_id: int, available: list[Variable], requested: str | None) -> list[Variable]:
@@ -209,10 +282,23 @@ async def parameter_names(session: SessionDep, variables: Sequence[Variable]) ->
   return [names.get(variable.parameter_id) for variable in variables]
 
 
-def read_json(body: dict[str, Any], stores: list[Path], time_name: str, start: datetime | None, end: datetime | None) -> bytes:
+def read_json(
+  body: dict[str, Any],
+  stores: list[Path],
+  time_name: str,
+  names: dict[str, bool],
+  start: datetime | None,
+  end: datetime | None,
+  depth: Variable | None,
+  depth_min: float | None,
+  depth_max: float | None,
+) -> bytes:
   """Reads the values of the variables in `body` from the stores into it, and returns the whole body as JSON."""
-  data = read_time_series(stores, time_name, list(body["variables"]), start, end)
+  depth_name = depth.name if depth else None
+  data = read_data(stores, time_name, names, start, end, depth_name, depth_min, depth_max)
   body["coordinates"][time_name]["values"] = iso_times(data.times)
+  if depth_name is not None and data.depths is not None:
+    body["coordinates"][depth_name]["values"] = json_values(data.depths)
   for name, variable in body["variables"].items():
     variable["values"] = json_values(data.values[name])
   return json.dumps(body, separators=(",", ":"), allow_nan=False).encode()

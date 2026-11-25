@@ -2647,6 +2647,11 @@ paths:
                   value:
                     detail: Dataset 124 has no depth coordinate, so depth_min and depth_max can't be used
                     code: no_depth
+                depth_range:
+                  summary: depth_min is deeper than depth_max
+                  value:
+                    detail: depth_min (10) is deeper than depth_max (2.5)
+                    code: invalid_depth_range
                 not_profile:
                   summary: nearest, before or after on a dataset without casts
                   value:

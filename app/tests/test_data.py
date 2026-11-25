@@ -53,26 +53,44 @@ async def add_dataset(session, **values) -> Dataset:
   return dataset
 
 
-async def add_variable(session, dataset: Dataset, name: str, source_name: str, role: VariableRole, **values) -> Variable:
-  variable = Variable(dataset_id=dataset.id, name=name, source_name=source_name, role=role, dimensions=["time"], **values)
+async def add_variable(
+  session, dataset: Dataset, name: str, source_name: str, role: VariableRole, dimensions: list[str] | None = None, **values
+) -> Variable:
+  variable = Variable(dataset_id=dataset.id, name=name, source_name=source_name, role=role, dimensions=dimensions or ["time"], **values)
   session.add(variable)
   await session.commit()
   await session.refresh(variable)
   return variable
 
 
-async def build(session, dataset: Dataset, variables: list[Variable], paths: list[Path], feature_type=FeatureType.time_series) -> None:
-  """Writes the files to one store per year and points the partitions at them, like a sync does."""
+async def build(
+  session, dataset: Dataset, variables: list[Variable], layouts: dict[int | None, list[Path]], feature_type=FeatureType.time_series
+) -> None:
+  """
+  Writes the files to one store per year and depth layout (`None` for a dataset without depth), and points the partitions at them,
+  like a sync does.
+  """
   partitions = []
-  for year in range(2023, 2025):
-    store = f"{year}/1"
-    written = write_partition(paths, variables, feature_type, year, zarr_dir(dataset.id) / store)
-    if written.rows:
-      partitions.append(
-        Partition(dataset_id=dataset.id, year=year, path=store, rows=written.rows, time_start=written.time_start, time_end=written.time_end)
-      )
+  for layout, paths in layouts.items():
+    for year in range(2023, 2025):
+      store = f"{year}/1" if layout is None else f"{year}/{layout}/1"
+      written = write_partition(paths, variables, feature_type, year, zarr_dir(dataset.id) / store)
+      if written.rows:
+        partitions.append(
+          Partition(
+            dataset_id=dataset.id,
+            year=year,
+            layout=layout,
+            path=store,
+            rows=written.rows,
+            time_start=written.time_start,
+            time_end=written.time_end,
+            depth_min=written.depth_min,
+            depth_max=written.depth_max,
+          )
+        )
   session.add_all(partitions)
-  dataset.time_start, dataset.time_end = partitions[0].time_start, partitions[-1].time_end
+  dataset.time_start, dataset.time_end = min(p.time_start for p in partitions), max(p.time_end for p in partitions)
   session.add(dataset)
   await session.commit()
 
@@ -95,7 +113,7 @@ async def time_series(session, filesystem, tmp_path) -> TimeSeries:
     "wind_speed": await add_variable(session, dataset, "wind_speed", "ws", VariableRole.data, unit="m s-1"),
     "temperature_qual": await add_variable(session, dataset, "temperature_qual", "temp_qual", VariableRole.flag, flag_for="temperature"),
   }
-  await build(session, dataset, list(variables.values()), paths)
+  await build(session, dataset, list(variables.values()), {None: paths})
 
   source = xr.concat([xr.open_dataset(path).load() for path in paths], dim="time")
   return TimeSeries(dataset=dataset, variables=variables, source=source)
@@ -105,7 +123,10 @@ def iso(time: np.datetime64) -> str:
   return np.datetime_as_string(time, unit="ms") + "Z"
 
 
-def nulls(values: np.ndarray) -> list[float | None]:
+def nulls(values: np.ndarray) -> list:
+  """The values as the JSON has them: (nested) lists with `None` for NaN."""
+  if values.ndim > 1:
+    return [nulls(row) for row in values]
   return [None if np.isnan(value) else float(value) for value in values]
 
 
@@ -250,10 +271,9 @@ async def test_dataset_without_data(client, session):
   assert response.json() == {"detail": f"Dataset {unbuilt.id} has no data yet. Sync it first.", "code": "no_data"}
 
 
-@pytest.mark.parametrize("feature_type", [FeatureType.time_series_profile, FeatureType.profile])
-async def test_other_feature_types_not_yet(client, session, feature_type):
+async def test_profiles_not_yet(client, session):
   dataset = await add_dataset(
-    session, feature_type=feature_type, time_start=datetime(2024, 1, 1, tzinfo=UTC), time_end=datetime(2024, 2, 1, tzinfo=UTC)
+    session, feature_type=FeatureType.profile, time_start=datetime(2024, 1, 1, tzinfo=UTC), time_end=datetime(2024, 2, 1, tzinfo=UTC)
   )
   response = await get_data(client, dataset.id)
   assert response.status_code == 501
@@ -299,3 +319,149 @@ async def test_invalid_request_with_matching_etag(client, time_series):
   dataset = time_series.dataset
   response = await get_data(client, dataset.id, headers={"If-None-Match": f'"{dataset.id}-v{dataset.version}"'}, variables="salinity")
   assert response.status_code == 400
+
+
+# A thermistor chain (timeSeriesProfile) that was redeployed with other depths: two depth layouts
+
+
+LAYOUT_1 = [0.5, 1.0, 2.0]
+LAYOUT_2 = [0.5, 1.5, 2.0, 3.0]
+ALL_DEPTHS = [0.5, 1.0, 1.5, 2.0, 3.0]
+
+
+def profile_netcdf(path: Path, start: int, steps: int, depths: list[float], rng: np.random.Generator, depth_first: bool = False) -> Path:
+  """A thermistor chain file with a value every 10 minutes at each depth, and a surface temperature. Some temperatures are missing."""
+  temp = rng.normal(8, 3, (steps, len(depths)))
+  temp[rng.random(temp.shape) < 0.1] = np.nan
+  dims, values = (("depth", "time"), temp.T) if depth_first else (("time", "depth"), temp)
+  ds = xr.Dataset(
+    {
+      "temp": (dims, values, {"units": "degC"}),
+      "surfacetemp": ("time", rng.normal(9, 3, steps), {"units": "degC"}),
+    },
+    coords={
+      "time": ("time", start + 600 * np.arange(steps, dtype="float64"), {"units": UNIX_UNITS}),
+      "depth": ("depth", np.asarray(depths), {"units": "m"}),
+    },
+  )
+  ds.to_netcdf(path=path, engine="netcdf4", format="NETCDF4")
+  return path
+
+
+@pytest.fixture
+async def thermistor_chain(session, filesystem, tmp_path) -> TimeSeries:
+  """
+  Layout 1 from Dec 31 2023 to Jan 1 2024, with the temperature stored as (depth, time). Layout 2 on Jan 3 2024, with other depths.
+  Three partitions: 2023 and 2024 of layout 1, 2024 of layout 2.
+  """
+  rng = np.random.default_rng(2)
+  a = profile_netcdf(tmp_path / "a.nc", DEC_31, 288, LAYOUT_1, rng, depth_first=True)
+  b = profile_netcdf(tmp_path / "b.nc", JAN_3, 144, LAYOUT_2, rng)
+
+  dataset = await add_dataset(session, feature_type=FeatureType.time_series_profile)
+  variables = {
+    "time": await add_variable(session, dataset, "time", "time", VariableRole.time),
+    "depth": await add_variable(session, dataset, "depth", "depth", VariableRole.coordinate, unit="m", dimensions=["depth"]),
+    "temperature": await add_variable(session, dataset, "temperature", "temp", VariableRole.data, unit="degC", dimensions=["time", "depth"]),
+    "surface_temperature": await add_variable(session, dataset, "surface_temperature", "surfacetemp", VariableRole.data, unit="degC"),
+  }
+  await build(session, dataset, list(variables.values()), {1: [a], 2: [b]}, FeatureType.time_series_profile)
+
+  # the files joined on all their depths, NaN where a file has no such depth
+  files = [xr.open_dataset(path).load().transpose("time", "depth") for path in [a, b]]
+  source = xr.concat(files, dim="time", join="outer")
+  return TimeSeries(dataset=dataset, variables=variables, source=source)
+
+
+async def test_profile_values_match_the_source_files(client, thermistor_chain):
+  """The golden test for a timeSeriesProfile, with random time windows and depth ranges, across the change of depth layout."""
+  source = thermistor_chain.source
+  times = source.time.values
+  rng = np.random.default_rng(3)
+  for _ in range(20):
+    first, last = sorted(rng.integers(0, len(times), 2))
+    depth_min, depth_max = sorted(rng.choice([0.0, 0.5, 0.75, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0], 2))
+    params = {"start": iso(times[first]), "end": iso(times[last]), "depth_min": depth_min, "depth_max": depth_max}
+    response = await get_data(client, thermistor_chain.dataset.id, **params)
+    assert response.status_code == 200, params
+    body = response.json()
+
+    # the depths of the layouts the window touches: layout 1 has the first 288 time steps, layout 2 the rest
+    depths = sorted(set(LAYOUT_1 if first < 288 else []) | set(LAYOUT_2 if last >= 288 else []))
+    depths = [depth for depth in depths if depth_min <= depth <= depth_max]
+    expected = source.isel(time=slice(first, last + 1)).sel(depth=depths)
+
+    assert body["coordinates"]["time"]["values"] == [iso(time) for time in expected.time.values], params
+    assert body["coordinates"]["depth"]["values"] == expected.depth.values.tolist(), params
+    assert body["variables"]["temperature"]["values"] == nulls(expected.temp.values), params
+    assert body["variables"]["surface_temperature"]["values"] == nulls(expected.surfacetemp.values), params
+
+
+async def test_profile_shape(client, thermistor_chain):
+  response = await get_data(client, thermistor_chain.dataset.id)
+  assert response.status_code == 200
+  body = response.json()
+  assert body["feature_type"] == "timeSeriesProfile"
+  assert body["coordinates"]["depth"] == {"unit": "m", "dimensions": ["depth"], "values": ALL_DEPTHS}
+  assert len(body["coordinates"]["time"]["values"]) == 288 + 144
+  assert {name: (variable["dimensions"], variable["unit"]) for name, variable in body["variables"].items()} == {
+    "temperature": (["time", "depth"], "degC"),
+    "surface_temperature": (["time"], "degC"),
+  }
+  assert (body["query"]["depth_min"], body["query"]["depth_max"]) == (None, None)
+
+  # a depth that a layout doesn't have is null at its time steps: 1.0 m in layout 2, 3.0 m in layout 1
+  temperature = np.array(body["variables"]["temperature"]["values"], dtype="float64")
+  assert np.isnan(temperature[288:, ALL_DEPTHS.index(1.0)]).all()
+  assert np.isnan(temperature[:288, ALL_DEPTHS.index(3.0)]).all()
+
+
+async def test_one_layout_has_only_its_depths(client, thermistor_chain):
+  response = await get_data(client, thermistor_chain.dataset.id, start="2024-01-03", variables="temperature")
+  assert response.status_code == 200
+  body = response.json()
+  assert body["coordinates"]["depth"]["values"] == LAYOUT_2
+  assert len(body["variables"]["temperature"]["values"][0]) == len(LAYOUT_2)
+
+
+async def test_depth_range(client, thermistor_chain):
+  response = await get_data(client, thermistor_chain.dataset.id, depth_min=1, depth_max=2, end="2023-12-31T00:00:00Z")
+  assert response.status_code == 200
+  body = response.json()
+  assert body["coordinates"]["depth"]["values"] == [1.0, 2.0]  # 1.5 m is only in layout 2, which starts later
+  assert (body["query"]["depth_min"], body["query"]["depth_max"]) == (1, 2)
+  expected = thermistor_chain.source.isel(time=[0]).sel(depth=[1.0, 2.0]).temp.values
+  assert body["variables"]["temperature"]["values"] == nulls(expected)
+
+
+async def test_depth_range_without_depths(client, thermistor_chain):
+  """Variables with depth have no values left, the others keep theirs."""
+  response = await get_data(client, thermistor_chain.dataset.id, depth_min=10, end="2023-12-31T00:10:00Z")
+  assert response.status_code == 200
+  body = response.json()
+  assert body["coordinates"]["depth"]["values"] == []
+  assert body["variables"]["temperature"]["values"] == [[], []]
+  assert len(body["variables"]["surface_temperature"]["values"]) == 2
+
+
+async def test_depth_is_a_coordinate(client, thermistor_chain):
+  response = await get_data(client, thermistor_chain.dataset.id, variables="depth")
+  assert response.status_code == 400
+  assert response.json()["code"] == "unknown_variable"
+
+
+async def test_invalid_depth_ranges(client, time_series, thermistor_chain):
+  response = await get_data(client, time_series.dataset.id, depth_max=10)
+  assert response.status_code == 400
+  assert response.json() == {
+    "detail": f"Dataset {time_series.dataset.id} has no depth coordinate, so depth_min and depth_max can't be used",
+    "code": "no_depth",
+  }
+
+  response = await get_data(client, thermistor_chain.dataset.id, depth_min=10, depth_max=2.5)
+  assert response.status_code == 400
+  assert response.json() == {"detail": "depth_min (10) is deeper than depth_max (2.5)", "code": "invalid_depth_range"}
+
+  response = await get_data(client, thermistor_chain.dataset.id, depth_min=-1)
+  assert response.status_code == 422
+  assert response.json()["code"] == "validation_error"

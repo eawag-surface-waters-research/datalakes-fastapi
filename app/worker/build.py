@@ -113,6 +113,29 @@ async def check_files(context: JobContext, dataset: Dataset, variables: list[Var
   return checked
 
 
+async def check_layouts_dont_overlap(context: JobContext, dataset_id: int) -> None:
+  """
+  Fails the job if files with different depths (depth layouts) cover the same time..
+  """
+  async with context.session() as session:
+    query = select(File.path, File.time_start, File.time_end, File.depth_layout).where(
+      File.dataset_id == dataset_id, col(File.status).in_([FileStatus.new, FileStatus.ok]), col(File.depth_layout).is_not(None)
+    )
+    files = sorted((await session.exec(query)).all(), key=lambda file: file.time_start)
+
+  # in time order, a file overlaps another layout if it starts before the file that ends last so far has ended
+  latest = None
+  for file in files:
+    if latest is not None and file.time_start <= latest.time_end and file.depth_layout != latest.depth_layout:
+      raise JobError(
+        f"Nothing was written: {latest.path} (depth layout {latest.depth_layout}) and {file.path} (depth layout {file.depth_layout}) "
+        f"have different depths but both cover {file.time_start.isoformat()} to {min(file.time_end, latest.time_end).isoformat()}. "
+        "Fix the files so that only one depth layout covers each time."
+      )
+    if latest is None or file.time_end > latest.time_end:
+      latest = file
+
+
 type PartitionKey = tuple[int, int | None]  # (year, depth layout). The layout is `None` for a `timeSeries`
 
 
