@@ -2566,7 +2566,7 @@ paths:
 
         **Flags**: values are returned as stored. Flag variables are returned when they're requested, like any variable. With `mask=true`, values flagged as bad are replaced by `null`. Issues never mask values: they're listed at `GET /datasets/{dataset_id}/issues`.
 
-        **Formats:** JSON by default. `format=csv` returns one row per time (and depth), `format=netcdf` a NetCDF4 file with CF attributes.
+        **Formats:** JSON by default. `format=csv` returns one row per time (and depth), `format=netcdf` a NetCDF4 file with CF attributes. `format=binary` is for clients that plot a lot of data, such as the website: the same document as a JSON header, followed by the values as little-endian typed arrays (times as `float64` milliseconds since 1970-01-01 UTC, depths `float64`, variables `float32` with NaN for missing values). The body is the header's length (`uint32`), the header (padded with spaces to a multiple of 8 bytes), then the arrays, each at a multiple of 8 bytes. In the header, each `values` is replaced by `{dtype, shape, offset}`, the offset counted from the end of the header.
 
         **Size:** responses above about a certain size are refused with 413, pointing to `POST /exports` with the same query. A time range without data returns empty arrays.
 
@@ -2618,6 +2618,11 @@ paths:
                 2024-03-01T00:10:00Z,0.5,6.1
                 2024-03-01T00:10:00Z,1.0,6.0
                 2024-03-01T00:10:00Z,1.5,
+            application/vnd.datalakes.data:
+              schema:
+                type: string
+                contentMediaType: application/vnd.datalakes.data
+                description: "`format=binary`: the header's length as a little-endian `uint32`, the header (the JSON document with `{dtype, shape, offset}` in place of each `values`), then the arrays."
             application/x-netcdf:
               schema:
                 type: string
@@ -5707,7 +5712,7 @@ components:
       description: Response format.
       schema:
         type: string
-        enum: [json, csv, netcdf]
+        enum: [json, binary, csv, netcdf]
         default: json
       example: json
     if_none_match:

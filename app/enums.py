@@ -69,6 +69,11 @@ class FileStatus(StrEnum):
   ignored = "ignored"
 
 
+class DataFormat(StrEnum):
+  json = "json"
+  binary = "binary"
+
+
 class ExportFormat(StrEnum):
   netcdf = "netcdf"
   csv = "csv"

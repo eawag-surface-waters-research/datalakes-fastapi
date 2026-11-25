@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -463,5 +464,79 @@ async def test_invalid_depth_ranges(client, time_series, thermistor_chain):
   assert response.json() == {"detail": "depth_min (10) is deeper than depth_max (2.5)", "code": "invalid_depth_range"}
 
   response = await get_data(client, thermistor_chain.dataset.id, depth_min=-1)
+  assert response.status_code == 422
+  assert response.json()["code"] == "validation_error"
+
+
+# the binary format
+
+
+def decode(content: bytes) -> tuple[dict, dict[str, np.ndarray]]:
+  """The header and the arrays of a binary body, read like the website does, as views on the buffer."""
+  length = int.from_bytes(content[:4], "little")
+  header = json.loads(content[4 : 4 + length])
+  assert (4 + length) % 8 == 0
+  arrays = {}
+  for name, entry in [*header["coordinates"].items(), *header["variables"].items()]:
+    values = entry["values"]
+    assert values["offset"] % 8 == 0
+    count = int(np.prod(values["shape"]))
+    arrays[name] = np.frombuffer(content, dtype=np.dtype(values["dtype"]).newbyteorder("<"), count=count, offset=4 + length + values["offset"])
+    arrays[name] = arrays[name].reshape(values["shape"])
+  return header, arrays
+
+
+def as_json(values: np.ndarray) -> list:
+  """Binary values as the JSON has them: float32 rounded back to the nearest float64, NaN as `None`."""
+  return nulls(values.astype("float64"))
+
+
+async def test_binary_time_series_has_the_values_of_the_json(client, time_series):
+  await check_binary_matches_json(client, time_series.dataset)
+
+
+async def test_binary_profile_has_the_values_of_the_json(client, thermistor_chain):
+  await check_binary_matches_json(client, thermistor_chain.dataset)
+
+
+async def check_binary_matches_json(client, dataset: Dataset) -> None:
+  params = {"start": "2023-12-31T23:00:00Z", "end": "2024-01-03T01:00:00Z"}
+  json_body = (await get_data(client, dataset.id, **params)).json()
+  response = await get_data(client, dataset.id, format="binary", **params)
+  assert response.status_code == 200
+  assert response.headers["content-type"] == "application/vnd.datalakes.data"
+  assert response.headers["etag"] == f'"{dataset.id}-v{dataset.version}"'
+  header, arrays = decode(response.content)
+
+  # the header is the JSON document with where each array is instead of its values, and times in milliseconds
+  without_values = {**json_body, "coordinates": {}, "variables": {}}
+  assert {**header, "coordinates": {}, "variables": {}} == without_values
+  assert header["coordinates"]["time"]["unit"] == "milliseconds since 1970-01-01T00:00:00Z"
+  times = [datetime.fromtimestamp(ms / 1000, UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z") for ms in arrays["time"]]
+  assert times == json_body["coordinates"]["time"]["values"]
+  assert header["coordinates"]["time"]["values"]["dtype"] == "float64"
+
+  for name, variable in json_body["variables"].items():
+    entry = header["variables"][name]
+    assert {key: value for key, value in entry.items() if key != "values"} == {key: value for key, value in variable.items() if key != "values"}
+    assert entry["values"]["dtype"] == "float32"
+    expected = np.array(variable["values"], dtype="float64").astype("float32")  # None becomes NaN
+    assert as_json(arrays[name]) == as_json(expected), name
+
+  if "depth" in json_body["coordinates"]:
+    assert arrays["depth"].tolist() == json_body["coordinates"]["depth"]["values"]
+    assert header["variables"]["temperature"]["values"]["shape"] == [len(times), len(arrays["depth"])]
+
+
+async def test_binary_without_data(client, thermistor_chain):
+  response = await get_data(client, thermistor_chain.dataset.id, format="binary", start="2030-01-01", variables="temperature")
+  assert response.status_code == 200
+  header, arrays = decode(response.content)
+  assert (arrays["time"].shape, arrays["depth"].shape) == ((0,), (0,))  # no data in the time range, so no depths either
+  assert header["variables"]["temperature"]["values"]["shape"] == [0, 0]
+
+
+async def test_unknown_format(client, time_series):
+  response = await get_data(client, time_series.dataset.id, format="xml")
   assert response.status_code == 422
   assert response.json()["code"] == "validation_error"

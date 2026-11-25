@@ -9,13 +9,13 @@ from fastapi import APIRouter, Header, Query, Response
 from sqlmodel import col, select
 
 from app.database import SessionDep
-from app.enums import DatasetKind, FeatureType, VariableRole
+from app.enums import DataFormat, DatasetKind, FeatureType, VariableRole
 from app.errors import ApiError, ErrorResponse, not_found
 from app.models import Dataset, Parameter, Partition, Variable
 from app.openapi import PUBLIC_TAG
 from app.params import parse_time_range
 from app.partitions import depth_variable
-from app.reading import in_read_pool, read_data
+from app.reading import Data, in_read_pool, read_data
 from app.schemas.data import DataResponse
 from app.storage import zarr_dir
 
@@ -102,6 +102,10 @@ DepthMax = Annotated[
   float | None,
   Query(ge=0, description="Deepest depth to return, in metres, inclusive. Only for datasets with depth.", examples=[10]),
 ]
+Format = Annotated[
+  DataFormat,
+  Query(description="`json` or `binary`"),
+]
 IfNoneMatch = Annotated[
   str | None,
   Header(
@@ -145,6 +149,7 @@ async def get_data(
   end: DataEnd = None,
   depth_min: DepthMin = None,
   depth_max: DepthMax = None,
+  format: Format = DataFormat.json,
   if_none_match: IfNoneMatch = None,
 ):
   """
@@ -159,7 +164,15 @@ async def get_data(
 
   A time range without data returns empty arrays. Missing values are `null`.
 
-  Values are returned as stored. Flag variables are returned when they're requested, like any variable.
+  **Binary format** (`format=binary`, media type `application/vnd.datalakes.data`): the same document, but each `values` is replaced
+  by where its values are, `{"dtype": "float32", "shape": [51240, 48], "offset": 409920}`. The body is:
+
+  1. the length of the header in bytes, as a little-endian 32-bit unsigned integer;
+  2. the header, the document as UTF-8 JSON, padded with spaces so that what follows starts at a multiple of 8 bytes;
+  3. the values of each coordinate and variable, little-endian, at its `offset` from the end of the header, each at a multiple of 8.
+
+  Times are `float64` milliseconds since 1970-01-01 UTC, depths `float64`, and all variables `float32`, with
+  NaN for missing values.
 
   - **Drafts:** their data can be read like any other.
   - **Link datasets** have no data here (404 with code `link_dataset`). Their data is at their `external_url`.
@@ -225,10 +238,10 @@ async def get_data(
   if depth is not None:
     body["coordinates"][depth.name] = {"unit": depth.unit, "dimensions": [depth.name], "values": []}
 
-  # reading and writing the JSON both take long for large responses, so both run in the read pool
+  # reading and writing the data both take long for large responses, so both run in the read pool
   names = {variable.name: has_depth(variable, depth) for variable in selected}
-  content = await in_read_pool(read_json, body, stores, time_variable.name, names, start_time, end_time, depth, depth_min, depth_max)
-  return Response(content=content, media_type="application/json", headers={"ETag": etag})
+  content = await in_read_pool(read_body, format, body, stores, time_variable.name, names, start_time, end_time, depth, depth_min, depth_max)
+  return Response(content=content, media_type=MEDIA_TYPES[format], headers={"ETag": etag})
 
 
 def has_depth(variable: Variable, depth: Variable | None) -> bool:
@@ -282,7 +295,11 @@ async def parameter_names(session: SessionDep, variables: Sequence[Variable]) ->
   return [names.get(variable.parameter_id) for variable in variables]
 
 
-def read_json(
+MEDIA_TYPES = {DataFormat.json: "application/json", DataFormat.binary: "application/vnd.datalakes.data"}
+
+
+def read_body(
+  format: DataFormat,
   body: dict[str, Any],
   stores: list[Path],
   time_name: str,
@@ -293,15 +310,56 @@ def read_json(
   depth_min: float | None,
   depth_max: float | None,
 ) -> bytes:
-  """Reads the values of the variables in `body` from the stores into it, and returns the whole body as JSON."""
+  """Reads the values of the variables in `body` from the stores, and returns the whole body in the format."""
   depth_name = depth.name if depth else None
   data = read_data(stores, time_name, names, start, end, depth_name, depth_min, depth_max)
+  if format == DataFormat.binary:
+    return binary_body(body, data, time_name, depth_name)
+  return json_body(body, data, time_name, depth_name)
+
+
+def json_body(body: dict[str, Any], data: Data, time_name: str, depth_name: str | None) -> bytes:
   body["coordinates"][time_name]["values"] = iso_times(data.times)
   if depth_name is not None and data.depths is not None:
     body["coordinates"][depth_name]["values"] = json_values(data.depths)
   for name, variable in body["variables"].items():
     variable["values"] = json_values(data.values[name])
   return json.dumps(body, separators=(",", ":"), allow_nan=False).encode()
+
+
+def binary_body(body: dict[str, Any], data: Data, time_name: str, depth_name: str | None) -> bytes:
+  """The header (the body, with where each array is instead of its values), then the arrays."""
+  time = body["coordinates"][time_name]
+  time["unit"] = "milliseconds since 1970-01-01T00:00:00Z"
+
+  # time is milliseconds since 1970-01-01 UTC as float64
+  # "<f8" ensures little-endian float64
+  arrays = [(time, data.times.astype("datetime64[ms]").astype("int64").astype("<f8"))]
+
+  # depth is float64, little-endian
+  if depth_name is not None and data.depths is not None:
+    arrays.append((body["coordinates"][depth_name], data.depths.astype("<f8")))
+
+  # each variable is float32, little-endian, with NaN for missing values
+  for name, variable in body["variables"].items():
+    values = data.values[name].astype("<f4")
+    values[~np.isfinite(values)] = np.nan
+    arrays.append((variable, values))
+
+  # concatenate the arrays (time, depth, each variable) into one bytes object
+  chunks, offset = [], 0
+  for entry, array in arrays:
+    entry["values"] = {"dtype": array.dtype.name, "shape": list(array.shape), "offset": offset}
+    chunk = array.tobytes()
+    chunks.append(chunk + bytes(-len(chunk) % 8))  # the next array starts at a multiple of 8
+    offset += len(chunks[-1])
+
+  # the header is the body, with each array replaced by where its values are
+  header = json.dumps(body, separators=(",", ":"), allow_nan=False).encode()
+  header += b" " * (-(4 + len(header)) % 8)  # the arrays start at a multiple of 8
+
+  # bytes: 4 bytes for the length of the header, then the header, then the arrays
+  return len(header).to_bytes(4, "little") + header + b"".join(chunks)
 
 
 def iso_time(value: datetime) -> str:
