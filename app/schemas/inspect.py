@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from app.enums import FeatureType
 from app.schemas.variables import VariableCommon
+from app.schemas.vocabularies import ParameterRead
 
 
 class InspectRequest(BaseModel):
@@ -31,7 +32,7 @@ class SampleSummary(BaseModel):
 class ParameterCandidate(BaseModel):
   """A parameter the variable may measure."""
 
-  parameter_id: int
+  parameter: ParameterRead = Field(description="The parameter from the `parameters` vocabulary. Send its `id` as the variable's `parameter_id`.")
   score: float = Field(
     description="How well it matches: up to 100 for the names, plus up to 50 if other published datasets chose it for a variable of the same name.",
     examples=[95.0],
@@ -41,7 +42,7 @@ class ParameterCandidate(BaseModel):
 class InspectedVariable(VariableCommon):
   """
   A suggested variable, with what was found in the file.
-  To create it, send it with `parameter_id` set, e.g. to the first of the `parameter_candidates`.
+  To create it, send it with `parameter_id` set, e.g. to the `parameter.id` of the first of the `parameter_candidates`.
   """
 
   parameter_candidates: list[ParameterCandidate] = Field(

@@ -3890,11 +3890,11 @@ components:
     ParameterCandidate:
       type: object
       description: A parameter the variable may measure.
-      required: [parameter_id, score]
+      required: [parameter, score]
       properties:
-        parameter_id:
-          type: integer
-          examples: [5]
+        parameter:
+          $ref: "#/components/schemas/Parameter"
+          description: The parameter from the `parameters` vocabulary. Send its `id` as the variable's `parameter_id`.
         score:
           type: number
           description: How well it matches, up to 100 for the names, plus up to 50 if other published datasets chose it for a variable of the same name.
@@ -3903,7 +3903,7 @@ components:
     InspectedVariable:
       description: |
         A suggested variable, with what was found in the file.
-        To create it with `POST /datasets/{dataset_id}/variables`, send it with `parameter_id` set, e.g. to the first of the `parameter_candidates`.
+        To create it with `POST /datasets/{dataset_id}/variables`, send it with `parameter_id` set, e.g. to the `parameter.id` of the first of the `parameter_candidates`.
       allOf:
         - $ref: "#/components/schemas/VariableCommon"
         - type: object

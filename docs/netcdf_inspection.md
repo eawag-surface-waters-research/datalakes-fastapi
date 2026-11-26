@@ -110,7 +110,7 @@ Each variable that has at least one dimension becomes a suggestion with the fiel
 | `description`          | `long_name`                                                                                                                                                                 |
 | `flag_for`             | The data variable a flag belongs to: from the data variable's CF `ancillary_variables`, otherwise by name (`temp_qual` → `temp`). Flags on `time` or `depth` aren't linked. |
 | `decoding`             | See below. Never set for time.                                                                                                                                              |
-| `parameter_candidates` | Up to 5 guesses from the `parameters` vocabulary, best first, see below. There is no `parameter_id`: set it from a candidate when creating the variable.                    |
+| `parameter_candidates` | Up to 5 guesses from the `parameters` vocabulary, best first, see below. Each has the whole `parameter` and a `score`. There is no `parameter_id`: set it to a candidate's `parameter.id`.                    |
 | `detail`               | Not guessed, always `null`. Set it by hand to tell apart variables of the same parameter, e.g. `at 2m` and `at 4m`.                                                         |
 
 ### Parameter (`parameter_candidates`)
@@ -132,7 +132,7 @@ bonus = 50 × (datasets that chose this parameter / datasets with a variable of 
 
 So a name given Solar Irradiance in 12 of 13 datasets gets +46 for it, enough to beat any name match. A name used in only one dataset gets +10, which decides close calls (e.g. `temp`, as close to Air Temperature as to Water temperature by name) but doesn't overrule a clear one. The history only exists once datasets with variables are published, e.g. after the migration from the old database.
 
-The 5 best parameters are suggested with their scores, best first. Among equal scores, the lower id comes first. Flags get no candidates.
+The 5 best parameters are suggested, each in full with its score, best first. Among equal scores, the lower id comes first. Flags get no candidates.
 
 ### Missing values (`decoding`)
 

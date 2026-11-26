@@ -34,7 +34,7 @@ def variable(source_name: str, role=VariableRole.data, **attributes) -> Inspecte
 def candidates(variable: InspectedVariable, history: History | None = None) -> list[tuple[int, float]]:
   """The candidates of one variable as (parameter_id, score), guessed from the seed vocabulary."""
   _, _ = guessed(variable, parameters=SEED_PARAMETERS, history=history)
-  return [(c.parameter_id, c.score) for c in variable.parameter_candidates]
+  return [(c.parameter.id, c.score) for c in variable.parameter_candidates]
 
 
 def guessed(*variables: InspectedVariable, parameters=PARAMETERS, history: History | None = None) -> tuple[dict[str, int | None], list[str]]:
@@ -53,7 +53,7 @@ def guessed(*variables: InspectedVariable, parameters=PARAMETERS, history: Histo
     warnings=[],
   )
   guess_parameters(result, parameters, history)
-  return {v.source_name: v.parameter_candidates[0].parameter_id if v.parameter_candidates else None for v in result.variables}, result.warnings
+  return {v.source_name: v.parameter_candidates[0].parameter.id if v.parameter_candidates else None for v in result.variables}, result.warnings
 
 
 def test_candidates_are_the_five_best_parameters_best_first():

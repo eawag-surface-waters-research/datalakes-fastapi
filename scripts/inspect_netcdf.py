@@ -35,7 +35,7 @@ def _short(value: Any) -> str:
   return f"{value:.6g}" if isinstance(value, float) else str(value)
 
 
-def print_report(result: InspectResult, size: int, seconds: float, parameter_names: dict[int, str]) -> None:
+def print_report(result: InspectResult, size: int, seconds: float) -> None:
   print(f"File        {result.file} ({size / 1e6:.1f} MB, {result.format}), read in {seconds:.3f} s")
   print(f"Dimensions  {', '.join(f'{dim}={size}' for dim, size in result.dimensions.items())}")
   print(f"Feature     {result.feature_type or '?'} ({result.feature_type_reason})")
@@ -54,7 +54,7 @@ def print_report(result: InspectResult, size: int, seconds: float, parameter_nam
   ]
   for v in result.variables:
     best = v.parameter_candidates[0] if v.parameter_candidates else None  # the report shows only the best candidate
-    parameter = f"{parameter_names.get(best.parameter_id, '?')} ({best.parameter_id}, score {best.score:g})" if best else ""
+    parameter = f"{best.parameter.name} ({best.parameter.id}, score {best.score:g})" if best else ""
     sample = f"{_short(v.sample.min)}..{_short(v.sample.max)} ({v.sample.missing}/{v.sample.count})"
     decoding = json.dumps(v.decoding) if v.decoding else ""
     row = [v.source_name, v.name, v.role, ",".join(v.dimensions), v.unit or "", parameter, v.flag_for or "", decoding, sample, v.description or ""]
@@ -95,4 +95,4 @@ if __name__ == "__main__":
   if args.json:
     print(result.model_dump_json(indent=2))
   else:
-    print_report(result, args.file.stat().st_size, seconds, {p.id: p.name for p in parameters if p.id is not None})
+    print_report(result, args.file.stat().st_size, seconds)

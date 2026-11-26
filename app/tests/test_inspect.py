@@ -85,7 +85,7 @@ async def test_inspect_file(client, session, filesystem):
   assert body["location"] == {"latitude": 46.5, "longitude": 6.66}
   assert body["global_attributes"] == {"title": "Thermistor chain", "latitude": 46.5, "longitude": 6.66}
   assert not any("parameter_id" in v for v in body["variables"])  # only candidates are suggested
-  assert [(v["name"], v["role"], v["parameter_candidates"][0]["parameter_id"]) for v in body["variables"]] == [
+  assert [(v["name"], v["role"], v["parameter_candidates"][0]["parameter"]["id"]) for v in body["variables"]] == [
     ("time", "time", 1),
     ("depth", "coordinate", 2),
     ("temp", "data", 5),
@@ -120,7 +120,7 @@ async def test_inspect_learns_from_published_datasets(client, session, filesyste
   response = await client.post(f"/datasets/{dataset.id}/inspect", json={"file": FILE})
   assert response.status_code == 200
   temp = {v["name"]: v for v in response.json()["variables"]}["temp"]
-  assert [c["parameter_id"] for c in temp["parameter_candidates"]][:2] == [68, 5]
+  assert [c["parameter"]["id"] for c in temp["parameter_candidates"]][:2] == [68, 5]
 
 
 @pytest.mark.parametrize("body", [None, {}, {"file": None}])

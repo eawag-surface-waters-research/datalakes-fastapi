@@ -20,6 +20,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.enums import DatasetStatus, VariableRole
 from app.models import Dataset, Parameter, Variable
 from app.schemas.inspect import InspectedVariable, InspectResult, ParameterCandidate
+from app.schemas.vocabularies import ParameterRead
 
 FUZZY_WEIGHT = 0.95  # a fuzzy match, even an exact one, ranks below a standard_name that is the parameter's cf_name
 HISTORY_WEIGHT = 50  # points a parameter gains if every published dataset with a variable of this name gave it this parameter
@@ -136,7 +137,9 @@ def guess_parameters(result: InspectResult, parameters: Iterable[Parameter], his
       continue
     ranked = rank_parameters(variable, keys, history or {})
     variable.parameter_candidates = [
-      ParameterCandidate(parameter_id=c.parameter.id, score=c.score) for c in ranked[:CANDIDATES] if c.parameter.id is not None
+      ParameterCandidate(parameter=ParameterRead.model_validate(c.parameter), score=c.score)
+      for c in ranked[:CANDIDATES]
+      if c.parameter.id is not None
     ]
 
 
