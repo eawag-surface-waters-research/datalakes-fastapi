@@ -3,6 +3,7 @@ Checks an archived file against the dataset's variables before it's processed.
 The variables are the schema every file must match:
 - The file is NetCDF (`.nc`) and can be opened
 - It has every variable's `source_name`, with the declared dimensions
+- No variable is on a dimension of length 1 other than the time and depth dimensions, e.g. temp(time, site) with a single site
 - Where the variable has a `unit`, the file's `units` attribute is the same string, apart from surrounding whitespace. If `units` is a list, its first value counts.
 - Time variables have CF units, e.g. `seconds since 1970-01-01 00:00:00`, and their values decode.
 
@@ -33,6 +34,7 @@ class ProblemCode(StrEnum):
   unreadable_file = "unreadable_file"  # a `.nc` file that can't be opened
   missing_variable = "missing_variable"
   wrong_dimensions = "wrong_dimensions"
+  unnecessary_dimension = "unnecessary_dimension"  # a dimension of length 1 that isn't time or depth, e.g. a single site
   unit_mismatch = "unit_mismatch"
   invalid_time_units = "invalid_time_units"
 
@@ -94,6 +96,9 @@ def check_file(path: Path, variables: Sequence[VariableCommon], depth_variable: 
     return check
 
   with ds:
+    # a file may have a single time step or a single depth, but no other dimension of length 1
+    allowed = {dim for variable in variables if variable.role == VariableRole.time or variable is depth_variable for dim in variable.dimensions}
+
     for variable in variables:
       label = _label(variable)
       var = ds.variables.get(variable.source_name)
@@ -109,6 +114,8 @@ def check_file(path: Path, variables: Sequence[VariableCommon], depth_variable: 
         continue
 
       _check_dimensions(path.name, variable, var, check)
+      _check_unnecessary_dimensions(path.name, variable, var, allowed, check)
+
       if variable is depth_variable and var.ndim == 1:
         check.depths = tuple(float(value) for value in np.asarray(var.values, dtype="float64"))
       if variable.role == VariableRole.time:
@@ -137,6 +144,21 @@ def _check_dimensions(name: str, variable: VariableCommon, var: xr.Variable, che
         ProblemCode.wrong_dimensions,
         name,
         f"variable '{variable.source_name}'{_label(variable)} has dimensions ({', '.join(found)}), expected ({', '.join(variable.dimensions)})",
+        variable.name,
+      )
+    )
+
+
+def _check_unnecessary_dimensions(name: str, variable: VariableCommon, var: xr.Variable, allowed: set[str], check: FileCheck) -> None:
+  unnecessary = [str(dim) for dim, size in zip(var.dims, var.shape, strict=True) if str(dim) not in allowed and size == 1]
+
+  if unnecessary:
+    check.problems.append(
+      Problem(
+        ProblemCode.unnecessary_dimension,
+        name,
+        f"variable '{variable.source_name}'{_label(variable)} has dimensions of length 1 other than time and depth: ({', '.join(unnecessary)}). "
+        "Remove them from the file",
         variable.name,
       )
     )

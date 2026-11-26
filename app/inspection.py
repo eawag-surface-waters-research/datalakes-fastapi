@@ -120,6 +120,7 @@ def inspect_file(path: Path, sample_size: int = SAMPLE_SIZE) -> InspectResult:
 
     _link_flags(ds, variables)
     _check_unit_spelling(variables, warnings)
+    _check_unnecessary_dimensions(ds, variables, axes, warnings)
 
     for dim in ds.dims:
       if dim not in ds.variables:
@@ -351,18 +352,41 @@ def _link_flags(ds: xr.Dataset, variables: list[InspectedVariable]) -> None:
       flag.flag_for = names[base]
 
 
+def _axis_dims(ds: xr.Dataset, axes: dict[str, str], axis: str) -> set[str]:
+  """The dimensions of the 1-D coordinates of an axis, e.g. time(time) and depth(depth), or depth(time) in a cast."""
+  return {str(ds.variables[name].dims[0]) for name, found in axes.items() if found == axis and ds.variables[name].ndim == 1}
+
+
+def _check_unnecessary_dimensions(ds: xr.Dataset, variables: list[InspectedVariable], axes: dict[str, str], warnings: list[str]) -> None:
+  """
+  Warns about dimensions of length 1 other than time and depth, e.g. temp(time, site) with a single site.
+  They add nothing, and the build rejects variables on them (unnecessary_dimension).
+  """
+  allowed = _axis_dims(ds, axes, "time") | _axis_dims(ds, axes, "vertical")  # a file may have a single time step or a single depth
+  used: dict[str, list[str]] = {}
+  for v in variables:
+    for dim in v.dimensions:
+      if dim not in allowed and ds.sizes[dim] == 1 and dim != v.source_name:  # not site(site) itself
+        used.setdefault(dim, []).append(v.source_name)
+  for dim, names in used.items():
+    warnings.append(
+      f"unnecessary_dimension: dimension '{dim}' has only one value, used by {', '.join(names)}. "
+      f"Remove it from the file. The build will reject variables on it."
+    )
+
+
 def _feature_type(ds: xr.Dataset, variables: list[InspectedVariable], axes: dict[str, str], warnings: list[str]) -> tuple[FeatureType | None, str]:
   """Guesses the feature type (timeSeries, timeSeriesProfile, profile) from the variables and their dimensions. Returns None if it can't be guessed."""
-  # the dimensions of the 1-D time and vertical coordinates, e.g. time(time) and depth(depth), or depth(time) in a cast
-  time_dims = {ds.variables[name].dims[0] for name, axis in axes.items() if axis == "time" and ds.variables[name].ndim == 1}
-  vertical_dims = {ds.variables[name].dims[0] for name, axis in axes.items() if axis == "vertical" and ds.variables[name].ndim == 1}
+  time_dims = _axis_dims(ds, axes, "time")
+  vertical_dims = _axis_dims(ds, axes, "vertical")
   data = [v for v in variables if v.role == VariableRole.data]
 
-  # e.g. a(depth, wavelength) for spectra: the storage layout only knows time and depth
+  # e.g. a(depth, wavelength) for spectra: the storage layout only knows time and depth.
+  # Dimensions of length 1 are left out: _check_unnecessary_dimensions warns about them
   other_dims: dict[str, list[str]] = {}
   for v in data:
     for dim in v.dimensions:
-      if dim not in time_dims | vertical_dims:
+      if dim not in time_dims | vertical_dims and ds.sizes[dim] > 1:
         other_dims.setdefault(dim, []).append(v.source_name)
   for dim, names in other_dims.items():
     warnings.append(f"Dimension '{dim}' is neither time nor depth, used by {', '.join(names)}. Only time and depth are supported.")

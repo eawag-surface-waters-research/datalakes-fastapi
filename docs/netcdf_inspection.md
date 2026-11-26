@@ -42,7 +42,8 @@ flowchart TD
 
   L --> F1["_link_flags: set flag_for<br/>(ancillary_variables, else temp_qual → temp)"]
   F1 --> F2["_check_unit_spelling: mg/l vs mg/L"]
-  F2 --> F3["warn: dimension without coordinate,<br/>no time variable or no ISO 8601 time attribute"]
+  F2 --> F2b["_check_unnecessary_dimensions:<br/>length 1, neither time nor depth (e.g. site)"]
+  F2b --> F3["warn: dimension without coordinate,<br/>no time variable or no ISO 8601 time attribute"]
   F3 --> F4["_feature_type"]
 
   subgraph FT ["_feature_type, first match wins"]
@@ -176,6 +177,7 @@ These don't change the suggestion, but point at something to fix in the file or 
 - non-numeric values
 - a dimension without a coordinate variable
 - a dimension that is neither time nor depth (e.g. `wavelength`); only time and depth are supported
+- `unnecessary_dimension`: a dimension of length 1 other than time and depth, e.g. `temp(time, site)` in a file of a single site. It adds nothing, and the build rejects variables on it with the problem `unnecessary_dimension`. Remove it from the files, e.g. with xarray's `squeeze("site")`. A single time step or a single depth is fine.
 - no latitude and longitude anywhere in the file
 
 ## Best practices for NetCDF files
@@ -190,4 +192,5 @@ Files that follow these rules need no corrections at setup and pass the build's 
 - **Missing values**: NaN, declared with `_FillValue`. No placeholders such as `-9999`, `1e36` or `inf`.
 - **Names**: short, stable and without spaces (`temp`, `o2_sat`). Add `long_name`, and `standard_name` where the [CF table](https://cfconventions.org/Data/cf-standard-names/current/build/cf-standard-name-table.html) has one.
 - **Quality flags**: integer variables with `flag_values` and `flag_meanings` (not in `units`), linked from the data variable with `ancillary_variables = "temp_qual"`.
+- **No unnecessary dimensions**: a variable is on time, or on time and depth, and nothing else. A file of one site or one sensor is `temp(time)`, not `temp(time, site)` with a single site.
 - **One layout per dataset**: every file has the same variables, dimension names, units and types. A new or renamed variable is a schema change.

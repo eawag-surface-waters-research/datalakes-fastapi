@@ -93,6 +93,29 @@ def test_dimensions_in_another_order_are_fine(tmp_path):
   assert check_file(write(tmp_path, dataset()), variables).ok
 
 
+def test_unnecessary_dimension(tmp_path):
+  # e.g. a file of a single site, with the site kept as a dimension
+  ds = xr.Dataset(
+    {"temp": (("time", "site"), np.ones((3, 1)), {"units": "degC"})},
+    coords={"time": ("time", TIMES, {"units": UNIX_UNITS}), "site": ("site", ["A"])},
+  )
+  variables = [variable("time", role=VariableRole.time), variable("temperature", dimensions=["time", "site"], unit="degC", source_name="temp")]
+  check = check_file(write(tmp_path, ds), variables)
+  assert codes(check) == [ProblemCode.unnecessary_dimension]
+  assert check.problems[0].variable == "temperature"
+  assert check.problems[0].message == (
+    "L2_202410.nc: variable 'temp' (source of 'temperature') has dimensions of length 1 other than time and depth: (site). Remove them from the file"
+  )
+
+
+def test_a_single_time_step_or_depth_is_fine(tmp_path):
+  ds = xr.Dataset(
+    {"temp": (("time", "depth"), np.ones((1, 1)), {"units": "degC"})},
+    coords={"time": ("time", TIMES[:1], {"units": UNIX_UNITS}), "depth": ("depth", [0.5], {"units": "m"})},
+  )
+  assert check_file(write(tmp_path, ds), VARIABLES, depth_variable=VARIABLES[1]).ok
+
+
 @pytest.mark.parametrize(
   ("temp_attrs", "found"),
   [({"units": "K"}, "units 'K'"), ({}, "no units attribute"), ({"units": ""}, "no units attribute"), ({"units": ["K", "degC"]}, "units 'K'")],

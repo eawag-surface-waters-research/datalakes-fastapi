@@ -317,6 +317,27 @@ def test_other_dimensions_and_dimensions_without_coordinates(tmp_path):
   assert "Dimension 'sensor' has no coordinate variable, so its values are just indexes." in result.warnings
 
 
+def test_unnecessary_dimension_warns(tmp_path):
+  ds = xr.Dataset(
+    {"temp": (("time", "site"), np.ones((4, 1)), {"units": "degC"}), "cond": (("site", "time"), np.ones((1, 4)), {"units": "uS/cm"})},
+    coords={"time": ("time", TIMES, {"units": UNIX_UNITS}), "site": ("site", ["A"])},
+  )
+  result = inspect_file(write(tmp_path, ds))
+  assert (
+    "unnecessary_dimension: dimension 'site' has only one value, used by temp, cond. Remove it from the files. The build will reject variables on it."
+  ) in result.warnings
+  assert not any("neither time nor depth" in w for w in result.warnings)  # the warning above is enough
+
+
+def test_a_single_time_step_or_depth_doesnt_warn(tmp_path):
+  ds = xr.Dataset(
+    {"temp": (("time", "depth"), np.ones((1, 1)), {"units": "degC"})},
+    coords={"time": ("time", TIMES[:1], {"units": UNIX_UNITS}), "depth": ("depth", [0.5], {"units": "m"})},
+  )
+  result = inspect_file(write(tmp_path, ds))
+  assert not any(w.startswith("unnecessary_dimension") for w in result.warnings)
+
+
 def test_non_numeric_variable(tmp_path):
   ds = time_series()
   ds["station"] = ("time", np.array(["a", "b", "c", "d"], dtype=object))
