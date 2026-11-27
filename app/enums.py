@@ -72,6 +72,7 @@ class FileStatus(StrEnum):
 class DataFormat(StrEnum):
   json = "json"
   binary = "binary"
+  csv = "csv"
 
 
 class ExportFormat(StrEnum):

@@ -371,7 +371,7 @@ def _check_unnecessary_dimensions(ds: xr.Dataset, variables: list[InspectedVaria
   for dim, names in used.items():
     warnings.append(
       f"unnecessary_dimension: dimension '{dim}' has only one value, used by {', '.join(names)}. "
-      f"Remove it from the file. The build will reject variables on it."
+      "Remove it from the files. The build will reject variables on it."
     )
 
 

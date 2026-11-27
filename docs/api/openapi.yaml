@@ -94,7 +94,7 @@ tags:
     description: The file index, listing every file copied from a dataset's source with its size, time range and processing status.
   # Data
   - name: Data
-    description: Read a dataset's values for a time and depth range, its latest values or its profile casts, as JSON, CSV or NetCDF.
+    description: Read a dataset's values for a time and depth range, its latest values or its profile casts, as JSON, binary or CSV.
   - name: Availability
     description: When data exists, per dataset and variable, and which datasets have data in a given period and area.
   - name: Exports
@@ -2566,7 +2566,7 @@ paths:
 
         **Flags**: values are returned as stored. Flag variables are returned when they're requested, like any variable. With `mask=true`, values flagged as bad are replaced by `null`. Issues never mask values: they're listed at `GET /datasets/{dataset_id}/issues`.
 
-        **Formats:** JSON by default. `format=csv` returns one row per time (and depth), `format=netcdf` a NetCDF4 file with CF attributes. `format=binary` is for clients that plot a lot of data, such as the website: the same document as a JSON header, followed by the values as little-endian typed arrays (times as `float64` milliseconds since 1970-01-01 UTC, depths `float64`, variables `float32` with NaN for missing values). The body is the header's length (`uint32`), the header (padded with spaces to a multiple of 8 bytes), then the arrays, each at a multiple of 8 bytes. In the header, each `values` is replaced by `{dtype, shape, offset}`, the offset counted from the end of the header.
+        **Formats:** JSON by default. `format=csv` returns one row per time, with a column per variable named after it, and an empty field for a missing value. It's only for `timeSeries` datasets, as the other feature types have variables on more than one dimension (400). `format=binary` is for clients that plot a lot of data, such as the website: the same document as a JSON header, followed by the values as little-endian typed arrays (times as `float64` milliseconds since 1970-01-01 UTC, depths `float64`, variables `float32` with NaN for missing values). The body is the header's length (`uint32`), the header (padded with spaces to a multiple of 8 bytes), then the arrays, each at a multiple of 8 bytes. In the header, each `values` is replaced by `{dtype, shape, offset}`, the offset counted from the end of the header.
 
         **Size:** responses above about a certain size are refused with 413, pointing to `POST /exports` with the same query. A time range without data returns empty arrays.
 
@@ -2611,23 +2611,15 @@ paths:
               schema:
                 type: string
               example: |
-                time,depth (m),temperature (degC)
-                2024-03-01T00:00:00Z,0.5,6.1
-                2024-03-01T00:00:00Z,1.0,6.0
-                2024-03-01T00:00:00Z,1.5,5.9
-                2024-03-01T00:10:00Z,0.5,6.1
-                2024-03-01T00:10:00Z,1.0,6.0
-                2024-03-01T00:10:00Z,1.5,
+                time,air_temperature,wind_speed
+                2024-10-30T09:00:00.000Z,10.8,2.9
+                2024-10-30T09:10:00.000Z,11.0,
+                2024-10-30T09:20:00.000Z,11.1,3.4
             application/vnd.datalakes.data:
               schema:
                 type: string
                 contentMediaType: application/vnd.datalakes.data
                 description: "`format=binary`: the header's length as a little-endian `uint32`, the header (the JSON document with `{dtype, shape, offset}` in place of each `values`), then the arrays."
-            application/x-netcdf:
-              schema:
-                type: string
-                contentMediaType: application/x-netcdf
-                description: A NetCDF4 file with the same coordinates, variables and units as the JSON, and the dataset's metadata as global attributes.
         "304":
           $ref: "#/components/responses/NotModified"
         "400":
@@ -2667,6 +2659,11 @@ paths:
                   value:
                     detail: nearest, before and after can't be combined with each other or with start and end
                     code: invalid_profile_selection
+                csv_not_time_series:
+                  summary: format=csv on a dataset that isn't a timeSeries
+                  value:
+                    detail: "Dataset 123 is a timeSeriesProfile dataset. CSV is only for timeSeries datasets: use json or binary"
+                    code: format_not_supported
         "404":
           $ref: "#/components/responses/NoData"
         "413":
@@ -5709,10 +5706,10 @@ components:
     format:
       name: format
       in: query
-      description: Response format.
+      description: Response format. `csv` is only for `timeSeries` datasets.
       schema:
         type: string
-        enum: [json, binary, csv, netcdf]
+        enum: [json, binary, csv]
         default: json
       example: json
     if_none_match:

@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -71,6 +73,12 @@ TIME_SERIES_EXAMPLE = {
   },
 }
 
+TIME_SERIES_CSV_EXAMPLE = """time,air_temperature,wind_speed
+2024-10-30T09:00:00.000Z,10.8,2.9
+2024-10-30T09:10:00.000Z,11.0,
+2024-10-30T09:20:00.000Z,11.1,3.4
+"""
+
 Variables = Annotated[
   str | None,
   Query(
@@ -104,7 +112,7 @@ DepthMax = Annotated[
 ]
 Format = Annotated[
   DataFormat,
-  Query(description="`json` or `binary`"),
+  Query(description="`json`, `binary` or `csv`. `csv` is only for `timeSeries` datasets."),
 ]
 IfNoneMatch = Annotated[
   str | None,
@@ -128,14 +136,15 @@ IfNoneMatch = Annotated[
             "timeSeries": {"summary": "A weather station (timeSeries)", "value": TIME_SERIES_EXAMPLE},
             "timeSeriesProfile": {"summary": "A thermistor chain (timeSeriesProfile), 0–1.5 m", "value": TIME_SERIES_PROFILE_EXAMPLE},
           }
-        }
+        },
+        "text/csv": {"schema": {"type": "string"}, "example": TIME_SERIES_CSV_EXAMPLE},
       },
     },
     304: {"description": "The dataset hasn't changed since the `ETag` sent in `If-None-Match`. No body."},
     400: {
       "model": ErrorResponse,
       "description": "The request makes no sense for this dataset, e.g. `start` is after `end`, a variable it doesn't have, "
-      "or a depth range for a dataset without depth.",
+      "a depth range for a dataset without depth, or `format=csv` for a dataset that isn't a `timeSeries`.",
     },
     404: {"model": ErrorResponse, "description": "The dataset doesn't exist, has no data yet, or is a link dataset."},
     501: {"model": ErrorResponse, "description": "`profile` datasets can't be read yet."},
@@ -174,6 +183,10 @@ async def get_data(
   Times are `float64` milliseconds since 1970-01-01 UTC, depths `float64`, and all variables `float32`, with
   NaN for missing values.
 
+  **CSV format** (`format=csv`, media type `text/csv`): one row per time, with a column for the time and one for each variable,
+  named after it. Units aren't in the CSV: they're in the JSON. Times are as in the JSON, and a missing value is an empty field.
+  Only for `timeSeries` datasets: other feature types have variables on more than one dimension (400 with code `format_not_supported`).
+
   - **Drafts:** their data can be read like any other.
   - **Link datasets** have no data here (404 with code `link_dataset`). Their data is at their `external_url`.
 
@@ -188,6 +201,12 @@ async def get_data(
     raise ApiError(404, "no_data", f"Dataset {dataset_id} has no data yet. Sync it first.")
   if dataset.feature_type not in SUPPORTED_FEATURE_TYPES:
     raise ApiError(501, "not_implemented", f"Data of {dataset.feature_type} datasets can't be read yet")
+  if format == DataFormat.csv and dataset.feature_type != FeatureType.time_series:
+    raise ApiError(
+      400,
+      "format_not_supported",
+      f"Dataset {dataset_id} is a {dataset.feature_type} dataset. CSV is only for timeSeries datasets.",
+    )
 
   start_time, end_time = parse_time_range(start, end)
   dataset_variables = list((await session.exec(select(Variable).where(Variable.dataset_id == dataset_id).order_by(col(Variable.id)))).all())
@@ -295,7 +314,7 @@ async def parameter_names(session: SessionDep, variables: Sequence[Variable]) ->
   return [names.get(variable.parameter_id) for variable in variables]
 
 
-MEDIA_TYPES = {DataFormat.json: "application/json", DataFormat.binary: "application/vnd.datalakes.data"}
+MEDIA_TYPES = {DataFormat.json: "application/json", DataFormat.binary: "application/vnd.datalakes.data", DataFormat.csv: "text/csv"}
 
 
 def read_body(
@@ -315,6 +334,8 @@ def read_body(
   data = read_data(stores, time_name, names, start, end, depth_name, depth_min, depth_max)
   if format == DataFormat.binary:
     return binary_body(body, data, time_name, depth_name)
+  if format == DataFormat.csv:
+    return csv_body(body, data, time_name)
   return json_body(body, data, time_name, depth_name)
 
 
@@ -360,6 +381,19 @@ def binary_body(body: dict[str, Any], data: Data, time_name: str, depth_name: st
 
   # bytes: 4 bytes for the length of the header, then the header, then the arrays
   return len(header).to_bytes(4, "little") + header + b"".join(chunks)
+
+
+def csv_body(body: dict[str, Any], data: Data, time_name: str) -> bytes:
+  """A header row, then one row per time: the time and each variable's value, empty where it's missing. Only for variables on time."""
+  names = [time_name, *body["variables"]]
+  # json_values has `None` for missing values, which the csv module writes as an empty field
+  columns = [iso_times(data.times)] + [json_values(data.values[name]) for name in body["variables"]]
+
+  out = io.StringIO()
+  writer = csv.writer(out, lineterminator="\n")
+  writer.writerow(names)
+  writer.writerows(zip(*columns, strict=True))
+  return out.getvalue().encode()
 
 
 def iso_time(value: datetime) -> str:

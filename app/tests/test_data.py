@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -534,6 +536,46 @@ async def test_binary_without_data(client, thermistor_chain):
   header, arrays = decode(response.content)
   assert (arrays["time"].shape, arrays["depth"].shape) == ((0,), (0,))  # no data in the time range, so no depths either
   assert header["variables"]["temperature"]["values"]["shape"] == [0, 0]
+
+
+# the CSV format
+
+
+async def test_csv_has_the_values_of_the_json(client, time_series):
+  params = {"start": "2023-12-31T23:00:00Z", "end": "2024-01-03T01:00:00Z"}
+  json_body = (await get_data(client, time_series.dataset.id, **params)).json()
+  response = await get_data(client, time_series.dataset.id, format="csv", **params)
+  assert response.status_code == 200
+  assert response.headers["content-type"] == "text/csv; charset=utf-8"
+  assert response.headers["etag"] == f'"{time_series.dataset.id}-v{time_series.dataset.version}"'
+
+  rows = list(csv.reader(io.StringIO(response.text)))
+  assert rows[0] == ["time", "temperature", "wind_speed", "temperature_qual"]
+  columns = list(zip(*rows[1:], strict=True))
+  assert list(columns[0]) == json_body["coordinates"]["time"]["values"]
+  for column, variable in zip(columns[1:], json_body["variables"].values(), strict=True):
+    assert [float(value) if value else None for value in column] == variable["values"]
+  assert "" in columns[1]  # some temperatures are missing
+
+
+async def test_csv_in_the_order_requested(client, time_series):
+  response = await get_data(
+    client, time_series.dataset.id, format="csv", variables="wind_speed,temperature", start="2024-01-03", end="2024-01-03T00:10:00Z"
+  )
+  assert response.text.splitlines()[0] == "time,wind_speed,temperature"
+  assert [row.split(",")[0] for row in response.text.splitlines()[1:]] == ["2024-01-03T00:00:00.000Z", "2024-01-03T00:10:00.000Z"]
+
+
+async def test_csv_without_data(client, time_series):
+  response = await get_data(client, time_series.dataset.id, format="csv", start="2030-01-01", variables="temperature")
+  assert response.status_code == 200
+  assert response.text == "time,temperature\n"
+
+
+async def test_csv_only_for_time_series(client, thermistor_chain):
+  response = await get_data(client, thermistor_chain.dataset.id, format="csv")
+  assert response.status_code == 400
+  assert response.json()["code"] == "format_not_supported"
 
 
 async def test_unknown_format(client, time_series):
